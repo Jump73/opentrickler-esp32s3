@@ -646,6 +646,13 @@ C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/wifi_provisioning/CMak
 C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/wifi_provisioning/CMakeFiles/install.dir
 C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/wifi_provisioning/CMakeFiles/install/local.dir
 C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/wifi_provisioning/CMakeFiles/install/strip.dir
+C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/board_expansion/CMakeFiles/__idf_board_expansion.dir
+C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/board_expansion/CMakeFiles/edit_cache.dir
+C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/board_expansion/CMakeFiles/rebuild_cache.dir
+C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/board_expansion/CMakeFiles/list_install_components.dir
+C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/board_expansion/CMakeFiles/install.dir
+C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/board_expansion/CMakeFiles/install/local.dir
+C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/board_expansion/CMakeFiles/install/strip.dir
 C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/main/CMakeFiles/__idf_main.dir
 C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/main/CMakeFiles/edit_cache.dir
 C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/main/CMakeFiles/rebuild_cache.dir
