@@ -653,6 +653,13 @@ C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/board_expansion/CMakeF
 C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/board_expansion/CMakeFiles/install.dir
 C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/board_expansion/CMakeFiles/install/local.dir
 C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/board_expansion/CMakeFiles/install/strip.dir
+C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/motors_mcpwm/CMakeFiles/__idf_motors_mcpwm.dir
+C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/motors_mcpwm/CMakeFiles/edit_cache.dir
+C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/motors_mcpwm/CMakeFiles/rebuild_cache.dir
+C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/motors_mcpwm/CMakeFiles/list_install_components.dir
+C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/motors_mcpwm/CMakeFiles/install.dir
+C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/motors_mcpwm/CMakeFiles/install/local.dir
+C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/motors_mcpwm/CMakeFiles/install/strip.dir
 C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/main/CMakeFiles/__idf_main.dir
 C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/main/CMakeFiles/edit_cache.dir
 C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/main/CMakeFiles/rebuild_cache.dir
