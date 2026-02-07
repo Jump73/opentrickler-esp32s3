@@ -1,0 +1,36 @@
+# ESP-IDF build artifacts
+build/
+!build/.gitkeep
+
+# SDK config backups
+sdkconfig.old
+sdkconfig.bak
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# IDE files
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Dependencies
+dependencies/
+managed_components/
+
+# Test artifacts
+*.log
+test_output/
+
+# Temporary files
+*.tmp
+*.bak
+*.orig
+
+# Flash download tool
+flash_download_tool_*.exe
