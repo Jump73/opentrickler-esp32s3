@@ -1,0 +1,15 @@
+{
+    "idf.portWin": "COM6",
+    "idf.adapterTargetName": "esp32s3",
+    "idf.flashType": "UART",
+    "idf.openOcdConfigs": [
+        "board/esp32s3-builtin.cfg"
+    ],
+    "idf.customExtraPaths": "C:\\Espressif\\frameworks\\esp-idf-5.2.3",
+    "idf.espIdfPath": "C:\\Espressif\\frameworks\\esp-idf-5.2.3",
+    "idf.pythonBinPath": "C:\\Espressif\\python_env\\idf5.2_py3.11_env\\Scripts\\python.exe",
+    "idf.toolsPath": "C:\\Espressif",
+    "terminal.integrated.env.windows": {
+        "IDF_PATH": "C:\\Espressif\\frameworks\\esp-idf-5.2.3"
+    }
+}

@@ -1,0 +1,984 @@
+#include "rest_handlers.h"
+#include "wifi_manager.h"
+#include "motors.h"
+#include "scale.h"
+#include "charge_mode.h"
+#include "profile.h"
+#include "cleanup_mode.h"
+#include "neopixel_led.h"
+#include "system_control.h"
+#include "esp_log.h"
+#include "esp_system.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include <string.h>
+#include <stdlib.h>
+#include <stdio.h>
+
+static const char *TAG = "REST_Handlers";
+
+// Task to perform delayed reboot (allows HTTP response to be sent first)
+static void delayed_reboot_task(void *arg)
+{
+    vTaskDelay(pdMS_TO_TICKS(1000));  // Wait 1 second
+    ESP_LOGI(TAG, "Rebooting now...");
+    esp_restart();
+}
+
+// Helper: Parse boolean from string
+bool string_to_boolean(const char *str)
+{
+    if (strcmp(str, "true") == 0 || strcmp(str, "1") == 0) {
+        return true;
+    }
+    return false;
+}
+
+// Helper: Convert boolean to string
+const char* boolean_to_string(bool value)
+{
+    return value ? "true" : "false";
+}
+
+// WiFi configuration REST handler
+// GET /rest/wireless_config - Returns current config
+// POST /rest/wireless_config?w0=ssid&w1=password&w2=auth&w3=timeout&w4=enable&ee=save
+char* rest_wireless_config_handler(int num_params, char *params[], char *values[])
+{
+    static char wireless_config_json_buffer[512];
+    wifi_config_data_t config = {0};
+    bool save_to_nvs = false;
+    bool config_changed = false;
+
+    ESP_LOGI(TAG, "WiFi config request with %d params", num_params);
+
+    // Load current config
+    wifi_manager_get_config(&config);
+
+    // If no params, just return current config
+    if (num_params == 0) {
+        snprintf(wireless_config_json_buffer,
+                 sizeof(wireless_config_json_buffer),
+                 "{\"w0\":\"%s\",\"w2\":%d,\"w3\":%lu,\"w4\":%s}",
+                 config.ssid,
+                 config.auth,
+                 config.timeout_ms,
+                 boolean_to_string(config.enable));
+        return wireless_config_json_buffer;
+    }
+
+    // Parse parameters and update config
+    for (int idx = 0; idx < num_params; idx++) {
+        ESP_LOGI(TAG, "  Param[%d]: %s = %s", idx, params[idx], values[idx]);
+
+        if (strcmp(params[idx], "w0") == 0) {
+            // SSID
+            strncpy(config.ssid, values[idx], sizeof(config.ssid) - 1);
+            config.ssid[sizeof(config.ssid) - 1] = '\0';
+            config_changed = true;
+        }
+        else if (strcmp(params[idx], "w1") == 0) {
+            // Password
+            strncpy(config.password, values[idx], sizeof(config.password) - 1);
+            config.password[sizeof(config.password) - 1] = '\0';
+            config_changed = true;
+        }
+        else if (strcmp(params[idx], "w2") == 0) {
+            // Auth type
+            config.auth = (wifi_auth_type_t)atoi(values[idx]);
+            config_changed = true;
+        }
+        else if (strcmp(params[idx], "w3") == 0) {
+            // Timeout
+            config.timeout_ms = (uint32_t)atoi(values[idx]);
+            if (config.timeout_ms == 0) {
+                config.timeout_ms = 10000; // Default 10 seconds
+            }
+            config_changed = true;
+        }
+        else if (strcmp(params[idx], "w4") == 0) {
+            // Enable
+            config.enable = string_to_boolean(values[idx]);
+            config_changed = true;
+        }
+        else if (strcmp(params[idx], "ee") == 0) {
+            // Save to EEPROM/NVS
+            save_to_nvs = string_to_boolean(values[idx]);
+        }
+    }
+
+    // Save to NVS if requested
+    if (save_to_nvs && config_changed) {
+        esp_err_t ret = wifi_manager_save_config(&config);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to save WiFi config: %s", esp_err_to_name(ret));
+        } else {
+            ESP_LOGI(TAG, "WiFi config saved to NVS");
+        }
+    }
+
+    // Return updated config (but not the password!)
+    snprintf(wireless_config_json_buffer,
+             sizeof(wireless_config_json_buffer),
+             "{\"w0\":\"%s\",\"w2\":%d,\"w3\":%lu,\"w4\":%s,\"saved\":%s}",
+             config.ssid,
+             config.auth,
+             config.timeout_ms,
+             boolean_to_string(config.enable),
+             boolean_to_string(save_to_nvs));
+
+    return wireless_config_json_buffer;
+}
+
+// System control REST handler
+// GET /rest/system_control - Returns system info
+// GET /rest/system_control?s4=true - Save all NVS settings
+// GET /rest/system_control?s5=true - Reboot device
+// GET /rest/system_control?s6=true - Erase all NVS settings
+char* rest_system_control_handler(int num_params, char *params[], char *values[])
+{
+    static char system_control_json_buffer[512];
+    system_info_t info;
+    bool save_to_nvs_flag = false;
+    bool software_reset_flag = false;
+    bool erase_nvs_flag = false;
+
+    ESP_LOGI(TAG, "System control request with %d params", num_params);
+
+    // Get system info
+    system_control_get_info(&info);
+
+    // Parse parameters
+    for (int idx = 0; idx < num_params; idx++) {
+        ESP_LOGI(TAG, "  Param[%d]: %s = %s", idx, params[idx], values[idx]);
+
+        if (strcmp(params[idx], "s4") == 0) {
+            // Save all NVS settings
+            save_to_nvs_flag = string_to_boolean(values[idx]);
+        }
+        else if (strcmp(params[idx], "s5") == 0) {
+            // Software reset
+            software_reset_flag = string_to_boolean(values[idx]);
+        }
+        else if (strcmp(params[idx], "s6") == 0) {
+            // Erase NVS
+            erase_nvs_flag = string_to_boolean(values[idx]);
+        }
+    }
+
+    // Perform actions
+    if (save_to_nvs_flag) {
+        ESP_LOGI(TAG, "Saving all NVS settings");
+        system_control_save_all_nvs();
+    }
+
+    if (erase_nvs_flag) {
+        ESP_LOGW(TAG, "Erasing all NVS settings!");
+        system_control_erase_nvs(software_reset_flag);
+    }
+
+    // Prepare response first (before reboot!)
+    snprintf(system_control_json_buffer,
+             sizeof(system_control_json_buffer),
+             "{\"s0\":\"%s\",\"s1\":\"%s\",\"s2\":\"%s\",\"s3\":\"%s\",\"s4\":%s,\"s5\":%s,\"s6\":%s}",
+             info.unique_id,
+             info.version_string,
+             info.vcs_hash,
+             info.build_type,
+             boolean_to_string(save_to_nvs_flag),
+             boolean_to_string(software_reset_flag),
+             boolean_to_string(erase_nvs_flag));
+
+    // Perform reboot if requested (and not already rebooting from erase)
+    if (software_reset_flag && !erase_nvs_flag) {
+        ESP_LOGI(TAG, "Software reset requested, rebooting in 1 second...");
+        // Create a task to reboot after delay (allows HTTP response to be sent)
+        xTaskCreate(delayed_reboot_task, "reboot_task", 2048, NULL, 5, NULL);
+    }
+
+    return system_control_json_buffer;
+}
+
+// Motor configuration REST handler
+// Parameters: m0-m9, ee
+char* rest_coarse_motor_config_handler(int num_params, char *params[], char *values[])
+{
+    static char motor_config_json_buffer[512];
+    motor_config_t config = {0};
+    bool save_to_nvs = false;
+    bool config_changed = false;
+
+    ESP_LOGI(TAG, "Coarse motor config request with %d params", num_params);
+
+    // Load current config
+    motors_get_config(MOTOR_COARSE, &config);
+
+    // If no params, just return current config
+    if (num_params == 0) {
+        snprintf(motor_config_json_buffer,
+                 sizeof(motor_config_json_buffer),
+                 "{\"m0\":%.3f,\"m1\":%lu,\"m2\":%d,\"m3\":%d,\"m4\":%d,\"m5\":%d,\"m6\":%.3f,\"m7\":%.7f,\"m8\":%s,\"m9\":%s}",
+                 config.angular_acceleration,
+                 config.full_steps_per_rotation,
+                 config.current_ma,
+                 config.microsteps,
+                 config.max_speed_rps,
+                 config.r_sense,
+                 config.min_speed_rps,
+                 config.gear_ratio,
+                 boolean_to_string(config.inverted_enable),
+                 boolean_to_string(config.inverted_direction));
+        return motor_config_json_buffer;
+    }
+
+    // Parse parameters and update config
+    for (int idx = 0; idx < num_params; idx++) {
+        ESP_LOGI(TAG, "  Param[%d]: %s = %s", idx, params[idx], values[idx]);
+
+        if (strcmp(params[idx], "m0") == 0) {
+            config.angular_acceleration = strtof(values[idx], NULL);
+            config_changed = true;
+        }
+        else if (strcmp(params[idx], "m1") == 0) {
+            config.full_steps_per_rotation = strtoul(values[idx], NULL, 10);
+            config_changed = true;
+        }
+        else if (strcmp(params[idx], "m2") == 0) {
+            config.current_ma = (uint16_t)atoi(values[idx]);
+            config_changed = true;
+        }
+        else if (strcmp(params[idx], "m3") == 0) {
+            config.microsteps = (uint16_t)atoi(values[idx]);
+            config_changed = true;
+        }
+        else if (strcmp(params[idx], "m4") == 0) {
+            config.max_speed_rps = (uint16_t)atoi(values[idx]);
+            config_changed = true;
+        }
+        else if (strcmp(params[idx], "m5") == 0) {
+            config.r_sense = (uint16_t)atoi(values[idx]);
+            config_changed = true;
+        }
+        else if (strcmp(params[idx], "m6") == 0) {
+            config.min_speed_rps = strtof(values[idx], NULL);
+            config_changed = true;
+        }
+        else if (strcmp(params[idx], "m7") == 0) {
+            config.gear_ratio = strtof(values[idx], NULL);
+            config_changed = true;
+        }
+        else if (strcmp(params[idx], "m8") == 0) {
+            config.inverted_enable = string_to_boolean(values[idx]);
+            config_changed = true;
+        }
+        else if (strcmp(params[idx], "m9") == 0) {
+            config.inverted_direction = string_to_boolean(values[idx]);
+            config_changed = true;
+        }
+        else if (strcmp(params[idx], "ee") == 0) {
+            save_to_nvs = string_to_boolean(values[idx]);
+        }
+    }
+
+    // Save to NVS if requested
+    if (save_to_nvs && config_changed) {
+        esp_err_t ret = motors_save_config(MOTOR_COARSE, &config);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to save coarse motor config: %s", esp_err_to_name(ret));
+        } else {
+            ESP_LOGI(TAG, "Coarse motor config saved to NVS");
+        }
+    }
+
+    // Return updated config
+    snprintf(motor_config_json_buffer,
+             sizeof(motor_config_json_buffer),
+             "{\"m0\":%.3f,\"m1\":%lu,\"m2\":%d,\"m3\":%d,\"m4\":%d,\"m5\":%d,\"m6\":%.3f,\"m7\":%.7f,\"m8\":%s,\"m9\":%s,\"saved\":%s}",
+             config.angular_acceleration,
+             config.full_steps_per_rotation,
+             config.current_ma,
+             config.microsteps,
+             config.max_speed_rps,
+             config.r_sense,
+             config.min_speed_rps,
+             config.gear_ratio,
+             boolean_to_string(config.inverted_enable),
+             boolean_to_string(config.inverted_direction),
+             boolean_to_string(save_to_nvs));
+
+    return motor_config_json_buffer;
+}
+
+char* rest_fine_motor_config_handler(int num_params, char *params[], char *values[])
+{
+    static char motor_config_json_buffer[512];
+    motor_config_t config = {0};
+    bool save_to_nvs = false;
+    bool config_changed = false;
+
+    ESP_LOGI(TAG, "Fine motor config request with %d params", num_params);
+
+    // Load current config
+    motors_get_config(MOTOR_FINE, &config);
+
+    // If no params, just return current config
+    if (num_params == 0) {
+        snprintf(motor_config_json_buffer,
+                 sizeof(motor_config_json_buffer),
+                 "{\"m0\":%.3f,\"m1\":%lu,\"m2\":%d,\"m3\":%d,\"m4\":%d,\"m5\":%d,\"m6\":%.3f,\"m7\":%.7f,\"m8\":%s,\"m9\":%s}",
+                 config.angular_acceleration,
+                 config.full_steps_per_rotation,
+                 config.current_ma,
+                 config.microsteps,
+                 config.max_speed_rps,
+                 config.r_sense,
+                 config.min_speed_rps,
+                 config.gear_ratio,
+                 boolean_to_string(config.inverted_enable),
+                 boolean_to_string(config.inverted_direction));
+        return motor_config_json_buffer;
+    }
+
+    // Parse parameters and update config
+    for (int idx = 0; idx < num_params; idx++) {
+        ESP_LOGI(TAG, "  Param[%d]: %s = %s", idx, params[idx], values[idx]);
+
+        if (strcmp(params[idx], "m0") == 0) {
+            config.angular_acceleration = strtof(values[idx], NULL);
+            config_changed = true;
+        }
+        else if (strcmp(params[idx], "m1") == 0) {
+            config.full_steps_per_rotation = strtoul(values[idx], NULL, 10);
+            config_changed = true;
+        }
+        else if (strcmp(params[idx], "m2") == 0) {
+            config.current_ma = (uint16_t)atoi(values[idx]);
+            config_changed = true;
+        }
+        else if (strcmp(params[idx], "m3") == 0) {
+            config.microsteps = (uint16_t)atoi(values[idx]);
+            config_changed = true;
+        }
+        else if (strcmp(params[idx], "m4") == 0) {
+            config.max_speed_rps = (uint16_t)atoi(values[idx]);
+            config_changed = true;
+        }
+        else if (strcmp(params[idx], "m5") == 0) {
+            config.r_sense = (uint16_t)atoi(values[idx]);
+            config_changed = true;
+        }
+        else if (strcmp(params[idx], "m6") == 0) {
+            config.min_speed_rps = strtof(values[idx], NULL);
+            config_changed = true;
+        }
+        else if (strcmp(params[idx], "m7") == 0) {
+            config.gear_ratio = strtof(values[idx], NULL);
+            config_changed = true;
+        }
+        else if (strcmp(params[idx], "m8") == 0) {
+            config.inverted_enable = string_to_boolean(values[idx]);
+            config_changed = true;
+        }
+        else if (strcmp(params[idx], "m9") == 0) {
+            config.inverted_direction = string_to_boolean(values[idx]);
+            config_changed = true;
+        }
+        else if (strcmp(params[idx], "ee") == 0) {
+            save_to_nvs = string_to_boolean(values[idx]);
+        }
+    }
+
+    // Save to NVS if requested
+    if (save_to_nvs && config_changed) {
+        esp_err_t ret = motors_save_config(MOTOR_FINE, &config);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to save fine motor config: %s", esp_err_to_name(ret));
+        } else {
+            ESP_LOGI(TAG, "Fine motor config saved to NVS");
+        }
+    }
+
+    // Return updated config
+    snprintf(motor_config_json_buffer,
+             sizeof(motor_config_json_buffer),
+             "{\"m0\":%.3f,\"m1\":%lu,\"m2\":%d,\"m3\":%d,\"m4\":%d,\"m5\":%d,\"m6\":%.3f,\"m7\":%.7f,\"m8\":%s,\"m9\":%s,\"saved\":%s}",
+             config.angular_acceleration,
+             config.full_steps_per_rotation,
+             config.current_ma,
+             config.microsteps,
+             config.max_speed_rps,
+             config.r_sense,
+             config.min_speed_rps,
+             config.gear_ratio,
+             boolean_to_string(config.inverted_enable),
+             boolean_to_string(config.inverted_direction),
+             boolean_to_string(save_to_nvs));
+
+    return motor_config_json_buffer;
+}
+
+// Scale configuration REST handler
+// Parameters: s0=driver, s1=baudrate, ee=save
+char* rest_scale_config_handler(int num_params, char *params[], char *values[])
+{
+    static char scale_config_json_buffer[256];
+    scale_config_t config = {0};
+    bool save_to_nvs = false;
+    bool config_changed = false;
+
+    ESP_LOGI(TAG, "Scale config request with %d params", num_params);
+
+    // Load current config
+    scale_get_config(&config);
+
+    // If no params, just return current config
+    if (num_params == 0) {
+        snprintf(scale_config_json_buffer,
+                 sizeof(scale_config_json_buffer),
+                 "{\"s0\":%d,\"s1\":%d}",
+                 config.scale_driver,
+                 config.scale_baudrate);
+        return scale_config_json_buffer;
+    }
+
+    // Parse parameters and update config
+    for (int idx = 0; idx < num_params; idx++) {
+        ESP_LOGI(TAG, "  Param[%d]: %s = %s", idx, params[idx], values[idx]);
+
+        if (strcmp(params[idx], "s0") == 0) {
+            config.scale_driver = (scale_driver_t)atoi(values[idx]);
+            scale_set_driver(config.scale_driver);
+            config_changed = true;
+        }
+        else if (strcmp(params[idx], "s1") == 0) {
+            config.scale_baudrate = (scale_baudrate_t)atoi(values[idx]);
+            config_changed = true;
+        }
+        else if (strcmp(params[idx], "ee") == 0) {
+            save_to_nvs = string_to_boolean(values[idx]);
+        }
+    }
+
+    // Save to NVS if requested
+    if (save_to_nvs && config_changed) {
+        esp_err_t ret = scale_save_config(&config);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to save scale config: %s", esp_err_to_name(ret));
+        } else {
+            ESP_LOGI(TAG, "Scale config saved to NVS");
+        }
+    }
+
+    // Return updated config
+    snprintf(scale_config_json_buffer,
+             sizeof(scale_config_json_buffer),
+             "{\"s0\":%d,\"s1\":%d,\"saved\":%s}",
+             config.scale_driver,
+             config.scale_baudrate,
+             boolean_to_string(save_to_nvs));
+
+    return scale_config_json_buffer;
+}
+
+// Scale action REST handler
+// Parameters: a0=action_type
+char* rest_scale_action_handler(int num_params, char *params[], char *values[])
+{
+    static char scale_action_json_buffer[128];
+    scale_action_t action = SCALE_ACTION_NO_ACTION;
+
+    ESP_LOGI(TAG, "Scale action request with %d params", num_params);
+
+    // Parse parameters
+    for (int idx = 0; idx < num_params; idx++) {
+        ESP_LOGI(TAG, "  Param[%d]: %s = %s", idx, params[idx], values[idx]);
+
+        if (strcmp(params[idx], "a0") == 0) {
+            action = (scale_action_t)atoi(values[idx]);
+            scale_perform_action(action);
+        }
+    }
+
+    // Return action response
+    snprintf(scale_action_json_buffer,
+             sizeof(scale_action_json_buffer),
+             "{\"a0\":%d}",
+             (int)action);
+
+    return scale_action_json_buffer;
+}
+
+// Charge mode configuration handler
+char* rest_charge_mode_config_handler(int num_params, char *params[], char *values[])
+{
+    static char charge_mode_config_json_buffer[512];
+    charge_mode_config_t config = {0};
+    bool save_to_nvs = false;
+    bool config_changed = false;
+
+    charge_mode_get_config(&config);
+
+    // If no parameters, return current config
+    if (num_params == 0) {
+        snprintf(charge_mode_config_json_buffer, sizeof(charge_mode_config_json_buffer),
+                 "{\"c1\":\"#%06lx\",\"c2\":\"#%06lx\",\"c3\":\"#%06lx\",\"c4\":\"#%06lx\","
+                 "\"c5\":%.3f,\"c6\":%.3f,\"c7\":%.3f,\"c8\":%.3f,\"c9\":%d,\"c10\":%s,\"c11\":%lu,\"c12\":%.3f}",
+                 config.neopixel_normal_charge_colour,
+                 config.neopixel_under_charge_colour,
+                 config.neopixel_over_charge_colour,
+                 config.neopixel_not_ready_colour,
+                 config.coarse_stop_threshold,
+                 config.fine_stop_threshold,
+                 config.set_point_sd_margin,
+                 config.set_point_mean_margin,
+                 (int)config.decimal_places,
+                 boolean_to_string(config.precharge_enable),
+                 config.precharge_time_ms,
+                 config.precharge_speed_rps);
+        return charge_mode_config_json_buffer;
+    }
+
+    ESP_LOGI(TAG, "Charge mode config request with %d params", num_params);
+
+    // Parse parameters
+    for (int idx = 0; idx < num_params; idx++) {
+        ESP_LOGI(TAG, "  Param[%d]: %s = %s", idx, params[idx], values[idx]);
+
+        // LED colors (hex strings)
+        if (strcmp(params[idx], "c1") == 0) {
+            config.neopixel_normal_charge_colour = hex_string_to_decimal(values[idx]);
+            config_changed = true;
+        }
+        else if (strcmp(params[idx], "c2") == 0) {
+            config.neopixel_under_charge_colour = hex_string_to_decimal(values[idx]);
+            config_changed = true;
+        }
+        else if (strcmp(params[idx], "c3") == 0) {
+            config.neopixel_over_charge_colour = hex_string_to_decimal(values[idx]);
+            config_changed = true;
+        }
+        else if (strcmp(params[idx], "c4") == 0) {
+            config.neopixel_not_ready_colour = hex_string_to_decimal(values[idx]);
+            config_changed = true;
+        }
+        // Thresholds and margins
+        else if (strcmp(params[idx], "c5") == 0) {
+            config.coarse_stop_threshold = strtof(values[idx], NULL);
+            config_changed = true;
+        }
+        else if (strcmp(params[idx], "c6") == 0) {
+            config.fine_stop_threshold = strtof(values[idx], NULL);
+            config_changed = true;
+        }
+        else if (strcmp(params[idx], "c7") == 0) {
+            config.set_point_sd_margin = strtof(values[idx], NULL);
+            config_changed = true;
+        }
+        else if (strcmp(params[idx], "c8") == 0) {
+            config.set_point_mean_margin = strtof(values[idx], NULL);
+            config_changed = true;
+        }
+        // Decimal places
+        else if (strcmp(params[idx], "c9") == 0) {
+            config.decimal_places = (decimal_places_t)atoi(values[idx]);
+            config_changed = true;
+        }
+        // Precharge settings
+        else if (strcmp(params[idx], "c10") == 0) {
+            config.precharge_enable = string_to_boolean(values[idx]);
+            config_changed = true;
+        }
+        else if (strcmp(params[idx], "c11") == 0) {
+            config.precharge_time_ms = strtoul(values[idx], NULL, 10);
+            config_changed = true;
+        }
+        else if (strcmp(params[idx], "c12") == 0) {
+            config.precharge_speed_rps = strtof(values[idx], NULL);
+            config_changed = true;
+        }
+        // Save to NVS
+        else if (strcmp(params[idx], "ee") == 0) {
+            save_to_nvs = string_to_boolean(values[idx]);
+        }
+    }
+
+    // Save to NVS if requested and config changed
+    if (save_to_nvs && config_changed) {
+        charge_mode_save_config(&config);
+    }
+
+    // Return updated config
+    snprintf(charge_mode_config_json_buffer, sizeof(charge_mode_config_json_buffer),
+             "{\"c1\":\"#%06lx\",\"c2\":\"#%06lx\",\"c3\":\"#%06lx\",\"c4\":\"#%06lx\","
+             "\"c5\":%.3f,\"c6\":%.3f,\"c7\":%.3f,\"c8\":%.3f,\"c9\":%d,\"c10\":%s,\"c11\":%lu,\"c12\":%.3f}",
+             config.neopixel_normal_charge_colour,
+             config.neopixel_under_charge_colour,
+             config.neopixel_over_charge_colour,
+             config.neopixel_not_ready_colour,
+             config.coarse_stop_threshold,
+             config.fine_stop_threshold,
+             config.set_point_sd_margin,
+             config.set_point_mean_margin,
+             (int)config.decimal_places,
+             boolean_to_string(config.precharge_enable),
+             config.precharge_time_ms,
+             config.precharge_speed_rps);
+
+    return charge_mode_config_json_buffer;
+}
+
+// Charge mode state handler
+char* rest_charge_mode_state_handler(int num_params, char *params[], char *values[])
+{
+    static char charge_mode_state_json_buffer[256];
+    charge_mode_state_t_runtime runtime_state = {0};
+
+    charge_mode_get_runtime_state(&runtime_state);
+
+    ESP_LOGI(TAG, "Charge mode state request with %d params", num_params);
+
+    // Parse control parameters
+    for (int idx = 0; idx < num_params; idx++) {
+        ESP_LOGI(TAG, "  Param[%d]: %s = %s", idx, params[idx], values[idx]);
+
+        if (strcmp(params[idx], "s0") == 0) {
+            // Set target charge weight
+            float target = strtof(values[idx], NULL);
+            charge_mode_set_target_weight(target);
+            runtime_state.target_charge_weight = target;
+        }
+        else if (strcmp(params[idx], "s2") == 0) {
+            // Set charge mode state
+            charge_mode_state_t new_state = (charge_mode_state_t)atoi(values[idx]);
+            charge_mode_set_state(new_state);
+            runtime_state.charge_mode_state = new_state;
+        }
+    }
+
+    // Get updated state for response
+    charge_mode_get_runtime_state(&runtime_state);
+
+    // Format current weight (stub - would get from scale in real implementation)
+    char weight_string[16];
+    snprintf(weight_string, sizeof(weight_string), "%.3f", runtime_state.current_weight);
+
+    // Format elapsed time
+    char elapsed_time_buffer[16];
+    snprintf(elapsed_time_buffer, sizeof(elapsed_time_buffer), "%.2f", runtime_state.elapsed_time_seconds);
+
+    // Return state
+    snprintf(charge_mode_state_json_buffer, sizeof(charge_mode_state_json_buffer),
+             "{\"s0\":%.3f,\"s1\":%s,\"s2\":%d,\"s3\":%lu,\"s4\":\"%s\",\"s5\":\"%s\"}",
+             runtime_state.target_charge_weight,
+             weight_string,
+             (int)runtime_state.charge_mode_state,
+             runtime_state.charge_mode_event,
+             runtime_state.profile_name,
+             elapsed_time_buffer);
+
+    return charge_mode_state_json_buffer;
+}
+
+// Profile configuration handler
+char* rest_profile_config_handler(int num_params, char *params[], char *values[])
+{
+    static char profile_config_json_buffer[512];
+    uint8_t profile_idx = profile_get_selected_idx();
+    bool save_to_nvs = false;
+    bool config_changed = false;
+
+    // Check if profile index is specified
+    for (int idx = 0; idx < num_params; idx++) {
+        if (strcmp(params[idx], "pf") == 0) {
+            profile_idx = (uint8_t)atoi(values[idx]);
+            if (profile_idx >= MAX_PROFILE_CNT) {
+                snprintf(profile_config_json_buffer, sizeof(profile_config_json_buffer),
+                         "{\"error\":\"InvalidProfileIndex\"}");
+                return profile_config_json_buffer;
+            }
+            profile_select(profile_idx);
+            config_changed = true;
+            break;
+        }
+    }
+
+    profile_t *current_profile = profile_get_by_idx(profile_idx);
+    if (!current_profile) {
+        snprintf(profile_config_json_buffer, sizeof(profile_config_json_buffer),
+                 "{\"error\":\"ProfileNotFound\"}");
+        return profile_config_json_buffer;
+    }
+
+    // If no parameters, return current profile config
+    if (num_params == 0) {
+        snprintf(profile_config_json_buffer, sizeof(profile_config_json_buffer),
+                 "{\"pf\":%d,\"p0\":%lu,\"p1\":%lu,\"p2\":\"%s\","
+                 "\"p3\":%.3f,\"p4\":%.3f,\"p5\":%.3f,\"p6\":%.3f,\"p7\":%.3f,"
+                 "\"p8\":%.3f,\"p9\":%.3f,\"p10\":%.3f,\"p11\":%.3f,\"p12\":%.3f}",
+                 profile_idx,
+                 current_profile->rev,
+                 current_profile->compatibility,
+                 current_profile->name,
+                 current_profile->coarse_kp,
+                 current_profile->coarse_ki,
+                 current_profile->coarse_kd,
+                 current_profile->coarse_min_flow_speed_rps,
+                 current_profile->coarse_max_flow_speed_rps,
+                 current_profile->fine_kp,
+                 current_profile->fine_ki,
+                 current_profile->fine_kd,
+                 current_profile->fine_min_flow_speed_rps,
+                 current_profile->fine_max_flow_speed_rps);
+        return profile_config_json_buffer;
+    }
+
+    ESP_LOGI(TAG, "Profile config request with %d params", num_params);
+
+    // Parse parameters
+    for (int idx = 0; idx < num_params; idx++) {
+        ESP_LOGI(TAG, "  Param[%d]: %s = %s", idx, params[idx], values[idx]);
+
+        if (strcmp(params[idx], "pf") == 0) {
+            // Already handled above
+            continue;
+        }
+        else if (strcmp(params[idx], "p0") == 0) {
+            current_profile->rev = strtoul(values[idx], NULL, 10);
+            config_changed = true;
+        }
+        else if (strcmp(params[idx], "p1") == 0) {
+            current_profile->compatibility = strtoul(values[idx], NULL, 10);
+            config_changed = true;
+        }
+        else if (strcmp(params[idx], "p2") == 0) {
+            strncpy(current_profile->name, values[idx], PROFILE_NAME_MAX_LEN - 1);
+            current_profile->name[PROFILE_NAME_MAX_LEN - 1] = '\0';
+            config_changed = true;
+        }
+        else if (strcmp(params[idx], "p3") == 0) {
+            current_profile->coarse_kp = strtof(values[idx], NULL);
+            config_changed = true;
+        }
+        else if (strcmp(params[idx], "p4") == 0) {
+            current_profile->coarse_ki = strtof(values[idx], NULL);
+            config_changed = true;
+        }
+        else if (strcmp(params[idx], "p5") == 0) {
+            current_profile->coarse_kd = strtof(values[idx], NULL);
+            config_changed = true;
+        }
+        else if (strcmp(params[idx], "p6") == 0) {
+            current_profile->coarse_min_flow_speed_rps = strtof(values[idx], NULL);
+            config_changed = true;
+        }
+        else if (strcmp(params[idx], "p7") == 0) {
+            current_profile->coarse_max_flow_speed_rps = strtof(values[idx], NULL);
+            config_changed = true;
+        }
+        else if (strcmp(params[idx], "p8") == 0) {
+            current_profile->fine_kp = strtof(values[idx], NULL);
+            config_changed = true;
+        }
+        else if (strcmp(params[idx], "p9") == 0) {
+            current_profile->fine_ki = strtof(values[idx], NULL);
+            config_changed = true;
+        }
+        else if (strcmp(params[idx], "p10") == 0) {
+            current_profile->fine_kd = strtof(values[idx], NULL);
+            config_changed = true;
+        }
+        else if (strcmp(params[idx], "p11") == 0) {
+            current_profile->fine_min_flow_speed_rps = strtof(values[idx], NULL);
+            config_changed = true;
+        }
+        else if (strcmp(params[idx], "p12") == 0) {
+            current_profile->fine_max_flow_speed_rps = strtof(values[idx], NULL);
+            config_changed = true;
+        }
+        else if (strcmp(params[idx], "ee") == 0) {
+            save_to_nvs = string_to_boolean(values[idx]);
+        }
+    }
+
+    // Save to NVS if requested and config changed
+    if (save_to_nvs && config_changed) {
+        profile_save();
+    }
+
+    // Return updated config
+    snprintf(profile_config_json_buffer, sizeof(profile_config_json_buffer),
+             "{\"pf\":%d,\"p0\":%lu,\"p1\":%lu,\"p2\":\"%s\","
+             "\"p3\":%.3f,\"p4\":%.3f,\"p5\":%.3f,\"p6\":%.3f,\"p7\":%.3f,"
+             "\"p8\":%.3f,\"p9\":%.3f,\"p10\":%.3f,\"p11\":%.3f,\"p12\":%.3f}",
+             profile_idx,
+             current_profile->rev,
+             current_profile->compatibility,
+             current_profile->name,
+             current_profile->coarse_kp,
+             current_profile->coarse_ki,
+             current_profile->coarse_kd,
+             current_profile->coarse_min_flow_speed_rps,
+             current_profile->coarse_max_flow_speed_rps,
+             current_profile->fine_kp,
+             current_profile->fine_ki,
+             current_profile->fine_kd,
+             current_profile->fine_min_flow_speed_rps,
+             current_profile->fine_max_flow_speed_rps);
+
+    return profile_config_json_buffer;
+}
+
+// Profile summary handler
+char* rest_profile_summary_handler(int num_params, char *params[], char *values[])
+{
+    static char profile_summary_json_buffer[512];
+    char names[MAX_PROFILE_CNT][PROFILE_NAME_MAX_LEN];
+    uint8_t count = 0;
+
+    ESP_LOGI(TAG, "Profile summary request");
+
+    profile_get_all_names(names, &count);
+    uint16_t current_idx = profile_get_selected_idx();
+
+    // Build JSON: {"s0":{"0":"AR2208,gr","1":"AR2209,gr",...},"s1":0}
+    int offset = snprintf(profile_summary_json_buffer, sizeof(profile_summary_json_buffer),
+                          "{\"s0\":{");
+
+    for (uint8_t i = 0; i < count; i++) {
+        offset += snprintf(profile_summary_json_buffer + offset,
+                          sizeof(profile_summary_json_buffer) - offset,
+                          "\"%d\":\"%s\"%s",
+                          i, names[i], (i < count - 1) ? "," : "");
+    }
+
+    snprintf(profile_summary_json_buffer + offset,
+             sizeof(profile_summary_json_buffer) - offset,
+             "},\"s1\":%d}",
+             current_idx);
+
+    return profile_summary_json_buffer;
+}
+
+// Cleanup mode state handler
+char* rest_cleanup_mode_state_handler(int num_params, char *params[], char *values[])
+{
+    static char cleanup_mode_state_json_buffer[128];
+    cleanup_mode_runtime_state_t runtime_state = {0};
+
+    cleanup_mode_get_state(&runtime_state);
+
+    ESP_LOGI(TAG, "Cleanup mode state request with %d params", num_params);
+
+    // Parse control parameters
+    for (int idx = 0; idx < num_params; idx++) {
+        ESP_LOGI(TAG, "  Param[%d]: %s = %s", idx, params[idx], values[idx]);
+
+        if (strcmp(params[idx], "s0") == 0) {
+            // Set cleanup mode state
+            cleanup_mode_state_t new_state = (cleanup_mode_state_t)atoi(values[idx]);
+            cleanup_mode_set_state(new_state);
+            runtime_state.cleanup_mode_state = new_state;
+        }
+        else if (strcmp(params[idx], "s1") == 0) {
+            // Set trickler speed
+            float speed = strtof(values[idx], NULL);
+            cleanup_mode_set_speed(speed);
+            runtime_state.trickler_speed = speed;
+        }
+    }
+
+    // Get updated state for response
+    cleanup_mode_get_state(&runtime_state);
+
+    // Return state
+    snprintf(cleanup_mode_state_json_buffer, sizeof(cleanup_mode_state_json_buffer),
+             "{\"s0\":%d,\"s1\":%.3f}",
+             (int)runtime_state.cleanup_mode_state,
+             runtime_state.trickler_speed);
+
+    return cleanup_mode_state_json_buffer;
+}
+
+// NeoPixel LED configuration handler
+char* rest_neopixel_led_config_handler(int num_params, char *params[], char *values[])
+{
+    static char neopixel_config_json_buffer[256];
+    neopixel_led_config_t config = {0};
+    bool save_to_nvs = false;
+    bool config_changed = false;
+
+    neopixel_led_get_config(&config);
+
+    // If no parameters, return current config
+    if (num_params == 0) {
+        snprintf(neopixel_config_json_buffer, sizeof(neopixel_config_json_buffer),
+                 "{\"bl\":\"#%06lx\",\"l1\":\"#%06lx\",\"l2\":\"#%06lx\",\"l3\":%d,\"l4\":%s,\"l5\":%d}",
+                 config.default_led_colours.mini12864_backlight_colour,
+                 config.default_led_colours.led1_colour,
+                 config.default_led_colours.led2_colour,
+                 (int)config.pwm_out_led_chain_count,
+                 boolean_to_string(config.pwm_out_led_is_rgbw),
+                 (int)config.pwm_out_led_colour_order);
+        return neopixel_config_json_buffer;
+    }
+
+    ESP_LOGI(TAG, "NeoPixel LED config request with %d params", num_params);
+
+    // Parse parameters
+    for (int idx = 0; idx < num_params; idx++) {
+        ESP_LOGI(TAG, "  Param[%d]: %s = %s", idx, params[idx], values[idx]);
+
+        if (strcmp(params[idx], "bl") == 0) {
+            config.default_led_colours.mini12864_backlight_colour = hex_string_to_decimal(values[idx]);
+            config_changed = true;
+        }
+        else if (strcmp(params[idx], "l1") == 0) {
+            config.default_led_colours.led1_colour = hex_string_to_decimal(values[idx]);
+            config_changed = true;
+        }
+        else if (strcmp(params[idx], "l2") == 0) {
+            config.default_led_colours.led2_colour = hex_string_to_decimal(values[idx]);
+            config_changed = true;
+        }
+        else if (strcmp(params[idx], "l3") == 0) {
+            config.pwm_out_led_chain_count = (neopixel_led_chain_count_t)atoi(values[idx]);
+            config_changed = true;
+        }
+        else if (strcmp(params[idx], "l4") == 0) {
+            config.pwm_out_led_is_rgbw = string_to_boolean(values[idx]);
+            config_changed = true;
+        }
+        else if (strcmp(params[idx], "l5") == 0) {
+            config.pwm_out_led_colour_order = (neopixel_colour_order_t)atoi(values[idx]);
+            config_changed = true;
+        }
+        else if (strcmp(params[idx], "ee") == 0) {
+            save_to_nvs = string_to_boolean(values[idx]);
+        }
+    }
+
+    // Save to NVS if requested and config changed
+    if (save_to_nvs && config_changed) {
+        neopixel_led_save_config(&config);
+    }
+
+    // Update LED colors
+    if (config_changed) {
+        neopixel_led_set_colour(
+            config.default_led_colours.mini12864_backlight_colour,
+            config.default_led_colours.led1_colour,
+            config.default_led_colours.led2_colour);
+    }
+
+    // Return updated config
+    snprintf(neopixel_config_json_buffer, sizeof(neopixel_config_json_buffer),
+             "{\"bl\":\"#%06lx\",\"l1\":\"#%06lx\",\"l2\":\"#%06lx\",\"l3\":%d,\"l4\":%s,\"l5\":%d}",
+             config.default_led_colours.mini12864_backlight_colour,
+             config.default_led_colours.led1_colour,
+             config.default_led_colours.led2_colour,
+             (int)config.pwm_out_led_chain_count,
+             boolean_to_string(config.pwm_out_led_is_rgbw),
+             (int)config.pwm_out_led_colour_order);
+
+    return neopixel_config_json_buffer;
+}

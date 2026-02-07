@@ -19,21 +19,7 @@ static void display_bus_test_task(void *arg)
 }
 void app_main(void)
 {
-    // MINIMAL BOOT TEST - tylko printf, bez peryferiów
-    printf("\n\n=== ESP32-S3 BOOT TEST ===\n");
-    printf("APP: OpenTrickler ESP32-S3 Port\n");
-    printf("APP: Chip: ESP32-S3\n");
-    printf("APP: Minimal boot test OK!\n");
-
-    for(int i=0; i<10; i++) {
-        printf("APP: Boot counter: %d\n", i);
-        vTaskDelay(pdMS_TO_TICKS(500));
-    }
-
-    printf("APP: Now starting display test...\n");
-    xTaskCreate(display_bus_test_task, "disp_test", 8192, NULL, 5, NULL);
-    return;
-// 1) System init
+    // 1) System init
     ESP_ERROR_CHECK(nvs_flash_init());
 
     // 2) Safe board state: motors disabled, keep strap pins safe at boot
@@ -50,7 +36,7 @@ void app_main(void)
     vTaskDelay(pdMS_TO_TICKS(2000));
 
     // 5) Start MCPWM STEP test (STEP on GPIO3, strap-safe after delay)
-    // DISABLED: motors_mcpwm_init(...);
+    motors_mcpwm_init();
     motors_mcpwm_start_test(100);
     ESP_LOGI(TAG, "STEP running @100Hz, still DISABLED (EN=1).");
 
@@ -75,4 +61,6 @@ void app_main(void)
     display_bus_test_start();
 
 }
-// static bool g_motors_disabled = true;
+
+
+

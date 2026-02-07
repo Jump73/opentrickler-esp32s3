@@ -1,6 +1,8 @@
 idf_component_register(
-    SRCS "ot_esp32s3_tmp.c"
-    INCLUDE_DIRS "."
-    REQUIRES board_expansion motors_mcpwm nvs_flash esp_system log freertos
+    SRCS "web_test.c"
+    INCLUDE_DIRS "." "generated"
+    REQUIRES driver esp_timer freertos log nvs_flash spi_flash
+        wifi_manager http_server rest_handlers motors scale charge_mode profile cleanup_mode neopixel_led system_control
+
 )
 
