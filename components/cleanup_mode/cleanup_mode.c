@@ -1,4 +1,5 @@
 #include "cleanup_mode.h"
+#include "motors.h"
 #include "esp_log.h"
 #include <string.h>
 
@@ -39,11 +40,21 @@ esp_err_t cleanup_mode_set_state(cleanup_mode_state_t state)
 
 esp_err_t cleanup_mode_set_speed(float speed)
 {
-    ESP_LOGI(TAG, "Setting trickler speed to: %.3f (stub)", speed);
+    ESP_LOGI(TAG, "Setting trickler speed to: %.3f", speed);
     runtime_state.trickler_speed = speed;
 
-    // TODO: Set motor speed when motor control is implemented
-    // motor_set_speed(SELECT_BOTH_MOTOR, speed);
+    // Enable motors if speed > 0, disable if speed == 0
+    if (speed > 0.001f) {
+        motor_enable(MOTOR_COARSE, true);
+        motor_enable(MOTOR_FINE, true);
+        motor_set_speed(MOTOR_COARSE, speed);
+        motor_set_speed(MOTOR_FINE, speed);
+    } else {
+        motor_set_speed(MOTOR_COARSE, 0.0f);
+        motor_set_speed(MOTOR_FINE, 0.0f);
+        motor_enable(MOTOR_COARSE, false);
+        motor_enable(MOTOR_FINE, false);
+    }
 
     return ESP_OK;
 }

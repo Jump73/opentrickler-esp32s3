@@ -419,7 +419,87 @@ endif()
 
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)
   # Include the install script for the subdirectory.
+  include("C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/wifi_manager/cmake_install.cmake")
+endif()
+
+if(NOT CMAKE_INSTALL_LOCAL_ONLY)
+  # Include the install script for the subdirectory.
+  include("C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/http_server/cmake_install.cmake")
+endif()
+
+if(NOT CMAKE_INSTALL_LOCAL_ONLY)
+  # Include the install script for the subdirectory.
+  include("C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/tmc_drivers/cmake_install.cmake")
+endif()
+
+if(NOT CMAKE_INSTALL_LOCAL_ONLY)
+  # Include the install script for the subdirectory.
+  include("C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/motors/cmake_install.cmake")
+endif()
+
+if(NOT CMAKE_INSTALL_LOCAL_ONLY)
+  # Include the install script for the subdirectory.
+  include("C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/scale/cmake_install.cmake")
+endif()
+
+if(NOT CMAKE_INSTALL_LOCAL_ONLY)
+  # Include the install script for the subdirectory.
+  include("C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/charge_mode/cmake_install.cmake")
+endif()
+
+if(NOT CMAKE_INSTALL_LOCAL_ONLY)
+  # Include the install script for the subdirectory.
+  include("C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/profile/cmake_install.cmake")
+endif()
+
+if(NOT CMAKE_INSTALL_LOCAL_ONLY)
+  # Include the install script for the subdirectory.
+  include("C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/cleanup_mode/cmake_install.cmake")
+endif()
+
+if(NOT CMAKE_INSTALL_LOCAL_ONLY)
+  # Include the install script for the subdirectory.
+  include("C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/neopixel_led/cmake_install.cmake")
+endif()
+
+if(NOT CMAKE_INSTALL_LOCAL_ONLY)
+  # Include the install script for the subdirectory.
+  include("C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/system_control/cmake_install.cmake")
+endif()
+
+if(NOT CMAKE_INSTALL_LOCAL_ONLY)
+  # Include the install script for the subdirectory.
+  include("C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/rest_handlers/cmake_install.cmake")
+endif()
+
+if(NOT CMAKE_INSTALL_LOCAL_ONLY)
+  # Include the install script for the subdirectory.
+  include("C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/main/cmake_install.cmake")
+endif()
+
+if(NOT CMAKE_INSTALL_LOCAL_ONLY)
+  # Include the install script for the subdirectory.
   include("C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/board_expansion/cmake_install.cmake")
+endif()
+
+if(NOT CMAKE_INSTALL_LOCAL_ONLY)
+  # Include the install script for the subdirectory.
+  include("C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/display_st7567/cmake_install.cmake")
+endif()
+
+if(NOT CMAKE_INSTALL_LOCAL_ONLY)
+  # Include the install script for the subdirectory.
+  include("C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/input_encoder/cmake_install.cmake")
+endif()
+
+if(NOT CMAKE_INSTALL_LOCAL_ONLY)
+  # Include the install script for the subdirectory.
+  include("C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/ot_pins/cmake_install.cmake")
+endif()
+
+if(NOT CMAKE_INSTALL_LOCAL_ONLY)
+  # Include the install script for the subdirectory.
+  include("C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/display_bus_test/cmake_install.cmake")
 endif()
 
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)
@@ -429,6 +509,6 @@ endif()
 
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)
   # Include the install script for the subdirectory.
-  include("C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/main/cmake_install.cmake")
+  include("C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/scale_generic/cmake_install.cmake")
 endif()
 

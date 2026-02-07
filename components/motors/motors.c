@@ -3,7 +3,9 @@
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "driver/gpio.h"
+#include "driver/mcpwm_prelude.h"
 #include <string.h>
+#include <math.h>
 
 // TMC2209 driver includes
 #include "tmc2209.h"
@@ -30,6 +32,17 @@ static const char *TAG = "Motors";
 // Motor driver instances
 static TMC2209_t coarse_tmc_driver;
 static TMC2209_t fine_tmc_driver;
+
+// MCPWM instances for STEP signal generation
+static mcpwm_timer_handle_t coarse_mcpwm_timer = NULL;
+static mcpwm_oper_handle_t coarse_mcpwm_oper = NULL;
+static mcpwm_cmpr_handle_t coarse_mcpwm_cmpr = NULL;
+static mcpwm_gen_handle_t coarse_mcpwm_gen = NULL;
+
+static mcpwm_timer_handle_t fine_mcpwm_timer = NULL;
+static mcpwm_oper_handle_t fine_mcpwm_oper = NULL;
+static mcpwm_cmpr_handle_t fine_mcpwm_cmpr = NULL;
+static mcpwm_gen_handle_t fine_mcpwm_gen = NULL;
 
 // Default configurations
 static motor_config_t coarse_motor_config = {
@@ -59,6 +72,84 @@ static motor_config_t fine_motor_config = {
     .inverted_direction = false,
     .inverted_enable = false
 };
+
+/**
+ * Initialize MCPWM for STEP signal generation
+ * Creates PWM signal at configurable frequency (initially 1 Hz, updated dynamically)
+ */
+static esp_err_t motor_mcpwm_init(motor_type_t motor)
+{
+    gpio_num_t step_pin;
+    mcpwm_timer_handle_t *timer;
+    mcpwm_oper_handle_t *oper;
+    mcpwm_cmpr_handle_t *cmpr;
+    mcpwm_gen_handle_t *gen;
+
+    if (motor == MOTOR_COARSE) {
+        step_pin = COARSE_MOTOR_STEP_PIN;
+        timer = &coarse_mcpwm_timer;
+        oper = &coarse_mcpwm_oper;
+        cmpr = &coarse_mcpwm_cmpr;
+        gen = &coarse_mcpwm_gen;
+    } else {
+        step_pin = FINE_MOTOR_STEP_PIN;
+        timer = &fine_mcpwm_timer;
+        oper = &fine_mcpwm_oper;
+        cmpr = &fine_mcpwm_cmpr;
+        gen = &fine_mcpwm_gen;
+    }
+
+    // Create MCPWM timer (initially 1 kHz, will be updated dynamically)
+    mcpwm_timer_config_t timer_config = {
+        .group_id = (motor == MOTOR_COARSE) ? 0 : 0,  // Both use group 0
+        .clk_src = MCPWM_TIMER_CLK_SRC_DEFAULT,
+        .resolution_hz = 10000000,  // 10 MHz resolution for precise timing
+        .count_mode = MCPWM_TIMER_COUNT_MODE_UP,
+        .period_ticks = 10000,  // Initial period (1 kHz = 10MHz / 10000)
+    };
+    ESP_ERROR_CHECK(mcpwm_new_timer(&timer_config, timer));
+
+    // Create MCPWM operator
+    mcpwm_operator_config_t oper_config = {
+        .group_id = (motor == MOTOR_COARSE) ? 0 : 0,
+    };
+    ESP_ERROR_CHECK(mcpwm_new_operator(&oper_config, oper));
+
+    // Connect operator to timer
+    ESP_ERROR_CHECK(mcpwm_operator_connect_timer(*oper, *timer));
+
+    // Create MCPWM comparator (for 50% duty cycle)
+    mcpwm_comparator_config_t cmpr_config = {
+        .flags.update_cmp_on_tez = true,
+    };
+    ESP_ERROR_CHECK(mcpwm_new_comparator(*oper, &cmpr_config, cmpr));
+
+    // Set initial compare value (50% duty cycle)
+    ESP_ERROR_CHECK(mcpwm_comparator_set_compare_value(*cmpr, 5000));  // 50% of 10000
+
+    // Create MCPWM generator
+    mcpwm_generator_config_t gen_config = {
+        .gen_gpio_num = step_pin,
+    };
+    ESP_ERROR_CHECK(mcpwm_new_generator(*oper, &gen_config, gen));
+
+    // Set generator actions (creates square wave)
+    // On timer empty (start of period): set high
+    ESP_ERROR_CHECK(mcpwm_generator_set_action_on_timer_event(*gen,
+                    MCPWM_GEN_TIMER_EVENT_ACTION(MCPWM_TIMER_DIRECTION_UP, MCPWM_TIMER_EVENT_EMPTY, MCPWM_GEN_ACTION_HIGH)));
+    // On compare match: set low (creates 50% duty cycle)
+    ESP_ERROR_CHECK(mcpwm_generator_set_action_on_compare_event(*gen,
+                    MCPWM_GEN_COMPARE_EVENT_ACTION(MCPWM_TIMER_DIRECTION_UP, *cmpr, MCPWM_GEN_ACTION_LOW)));
+
+    // Enable and start timer (but with very low frequency initially)
+    ESP_ERROR_CHECK(mcpwm_timer_enable(*timer));
+    ESP_ERROR_CHECK(mcpwm_timer_start_stop(*timer, MCPWM_TIMER_STOP_EMPTY));  // Start stopped
+
+    ESP_LOGI(TAG, "%s motor MCPWM initialized (STEP pin=%d)",
+             (motor == MOTOR_COARSE) ? "Coarse" : "Fine", step_pin);
+
+    return ESP_OK;
+}
 
 /**
  * Initialize GPIO pins for motor control
@@ -175,6 +266,19 @@ esp_err_t motors_init(void)
         return ret;
     }
 
+    // Initialize MCPWM for STEP signal generation
+    ret = motor_mcpwm_init(MOTOR_COARSE);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize coarse motor MCPWM");
+        return ret;
+    }
+
+    ret = motor_mcpwm_init(MOTOR_FINE);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize fine motor MCPWM");
+        return ret;
+    }
+
     // Initialize TMC2209 drivers
     ret = tmc2209_driver_init(MOTOR_COARSE, &coarse_tmc_driver, &coarse_motor_config);
     if (ret != ESP_OK) {
@@ -284,21 +388,78 @@ esp_err_t motors_get_config(motor_type_t motor, motor_config_t *config)
 // Motor control implementation
 esp_err_t motor_set_speed(motor_type_t motor, float speed_rps)
 {
-    // TODO: Implement MCPWM-based STEP signal generation
-    // For now, just log the request
-    ESP_LOGI(TAG, "%s motor speed set to: %.3f rps (MCPWM not yet implemented)",
-             (motor == MOTOR_COARSE) ? "Coarse" : "Fine", speed_rps);
+    const motor_config_t *config;
+    mcpwm_timer_handle_t timer;
+    mcpwm_cmpr_handle_t cmpr;
+    gpio_num_t dir_pin;
+    bool inverted;
+
+    // Get motor configuration and MCPWM handles
+    if (motor == MOTOR_COARSE) {
+        config = &coarse_motor_config;
+        timer = coarse_mcpwm_timer;
+        cmpr = coarse_mcpwm_cmpr;
+        dir_pin = COARSE_MOTOR_DIR_PIN;
+        inverted = coarse_motor_config.inverted_direction;
+    } else {
+        config = &fine_motor_config;
+        timer = fine_mcpwm_timer;
+        cmpr = fine_mcpwm_cmpr;
+        dir_pin = FINE_MOTOR_DIR_PIN;
+        inverted = fine_motor_config.inverted_direction;
+    }
 
     // Set direction pin based on speed sign
-    gpio_num_t dir_pin = (motor == MOTOR_COARSE) ? COARSE_MOTOR_DIR_PIN : FINE_MOTOR_DIR_PIN;
-    bool inverted = (motor == MOTOR_COARSE) ? coarse_motor_config.inverted_direction : fine_motor_config.inverted_direction;
-
     bool direction = (speed_rps >= 0);
     if (inverted) {
         direction = !direction;
     }
-
     gpio_set_level(dir_pin, direction ? 1 : 0);
+
+    // Get absolute speed
+    float abs_speed_rps = fabsf(speed_rps);
+
+    // Stop motor if speed is too low or zero
+    if (abs_speed_rps < 0.001f) {
+        mcpwm_timer_start_stop(timer, MCPWM_TIMER_STOP_EMPTY);
+        ESP_LOGD(TAG, "%s motor stopped (speed=0)",
+                 (motor == MOTOR_COARSE) ? "Coarse" : "Fine");
+        return ESP_OK;
+    }
+
+    // Calculate STEP frequency: freq = speed_rps × full_steps × microsteps
+    uint32_t steps_per_rev = config->full_steps_per_rotation * config->microsteps;
+    float step_freq_hz = abs_speed_rps * (float)steps_per_rev;
+
+    // MCPWM timer resolution is 10 MHz
+    const uint32_t MCPWM_RESOLUTION_HZ = 10000000;
+
+    // Calculate period ticks: period = resolution / frequency
+    uint32_t period_ticks = (uint32_t)(MCPWM_RESOLUTION_HZ / step_freq_hz);
+
+    // Limit to valid range (minimum 10 ticks, maximum ~1M ticks)
+    if (period_ticks < 10) {
+        period_ticks = 10;  // Max frequency ~1 MHz
+        ESP_LOGW(TAG, "%s motor speed too high, capping to max frequency",
+                 (motor == MOTOR_COARSE) ? "Coarse" : "Fine");
+    } else if (period_ticks > 1000000) {
+        period_ticks = 1000000;  // Min frequency ~10 Hz
+        ESP_LOGW(TAG, "%s motor speed too low, capping to min frequency",
+                 (motor == MOTOR_COARSE) ? "Coarse" : "Fine");
+    }
+
+    // Update timer period (this changes the frequency)
+    mcpwm_timer_set_period(timer, period_ticks);
+
+    // Update comparator to maintain 50% duty cycle
+    mcpwm_comparator_set_compare_value(cmpr, period_ticks / 2);
+
+    // Start timer if not already running
+    mcpwm_timer_start_stop(timer, MCPWM_TIMER_START_NO_STOP);
+
+    ESP_LOGI(TAG, "%s motor: speed=%.3f rps, step_freq=%.1f Hz, period=%lu ticks",
+             (motor == MOTOR_COARSE) ? "Coarse" : "Fine",
+             speed_rps, step_freq_hz, period_ticks);
 
     return ESP_OK;
 }
