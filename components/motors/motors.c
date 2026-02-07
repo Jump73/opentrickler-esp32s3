@@ -2,7 +2,12 @@
 #include "esp_log.h"
 #include "nvs_flash.h"
 #include "nvs.h"
+#include "driver/gpio.h"
 #include <string.h>
+
+// TMC2209 driver includes
+#include "tmc2209.h"
+#include "tmc_uart_hal_esp32.h"
 
 static const char *TAG = "Motors";
 
@@ -10,6 +15,21 @@ static const char *TAG = "Motors";
 #define NVS_KEY_COARSE "coarse"
 #define NVS_KEY_FINE "fine"
 #define CONFIG_VERSION 1
+
+// GPIO pin definitions (matching original Pico W pinout)
+#define COARSE_MOTOR_ADDR       0
+#define COARSE_MOTOR_EN_PIN     GPIO_NUM_6
+#define COARSE_MOTOR_STEP_PIN   GPIO_NUM_3
+#define COARSE_MOTOR_DIR_PIN    GPIO_NUM_2
+
+#define FINE_MOTOR_ADDR         1
+#define FINE_MOTOR_EN_PIN       GPIO_NUM_9
+#define FINE_MOTOR_STEP_PIN     GPIO_NUM_8
+#define FINE_MOTOR_DIR_PIN      GPIO_NUM_7
+
+// Motor driver instances
+static TMC2209_t coarse_tmc_driver;
+static TMC2209_t fine_tmc_driver;
 
 // Default configurations
 static motor_config_t coarse_motor_config = {
@@ -40,6 +60,83 @@ static motor_config_t fine_motor_config = {
     .inverted_enable = false
 };
 
+/**
+ * Initialize GPIO pins for motor control
+ */
+static esp_err_t motor_gpio_init(motor_type_t motor)
+{
+    gpio_num_t en_pin, dir_pin;
+    bool inverted_enable;
+
+    if (motor == MOTOR_COARSE) {
+        en_pin = COARSE_MOTOR_EN_PIN;
+        dir_pin = COARSE_MOTOR_DIR_PIN;
+        inverted_enable = coarse_motor_config.inverted_enable;
+    } else {
+        en_pin = FINE_MOTOR_EN_PIN;
+        dir_pin = FINE_MOTOR_DIR_PIN;
+        inverted_enable = fine_motor_config.inverted_enable;
+    }
+
+    // Configure ENABLE pin
+    gpio_config_t io_conf = {
+        .pin_bit_mask = (1ULL << en_pin),
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    ESP_ERROR_CHECK(gpio_config(&io_conf));
+
+    // Set initial state (disabled)
+    // If inverted_enable, LOW = enabled, so we want HIGH for disabled
+    gpio_set_level(en_pin, inverted_enable ? 1 : 0);
+
+    // Configure DIRECTION pin
+    io_conf.pin_bit_mask = (1ULL << dir_pin);
+    ESP_ERROR_CHECK(gpio_config(&io_conf));
+    gpio_set_level(dir_pin, 0);
+
+    // Note: STEP pin will be controlled by MCPWM later
+    // For now, we'll leave it unconfigured
+
+    ESP_LOGI(TAG, "%s motor GPIO initialized (EN=%d, DIR=%d)",
+             (motor == MOTOR_COARSE) ? "Coarse" : "Fine", en_pin, dir_pin);
+
+    return ESP_OK;
+}
+
+/**
+ * Initialize TMC2209 driver with configuration
+ */
+static esp_err_t tmc2209_driver_init(motor_type_t motor, TMC2209_t *driver, const motor_config_t *config)
+{
+    // Set defaults first
+    TMC2209_SetDefaults(driver);
+
+    // Apply user configuration
+    driver->config.motor.address = (motor == MOTOR_COARSE) ? COARSE_MOTOR_ADDR : FINE_MOTOR_ADDR;
+    driver->config.current = config->current_ma;
+    driver->config.r_sense = config->r_sense;
+    driver->config.hold_current_pct = 50;
+    driver->config.microsteps = config->microsteps;
+
+    // Initialize driver communication
+    if (!TMC2209_Init(driver)) {
+        ESP_LOGE(TAG, "Failed to initialize %s TMC2209 driver!",
+                 (motor == MOTOR_COARSE) ? "coarse" : "fine");
+        return ESP_FAIL;
+    }
+
+    ESP_LOGI(TAG, "%s TMC2209 initialized (addr=%d, current=%dmA, microsteps=%d)",
+             (motor == MOTOR_COARSE) ? "Coarse" : "Fine",
+             driver->config.motor.address,
+             driver->config.current,
+             driver->config.microsteps);
+
+    return ESP_OK;
+}
+
 esp_err_t motors_init(void)
 {
     ESP_LOGI(TAG, "Initializing motors module");
@@ -60,6 +157,38 @@ esp_err_t motors_init(void)
         ESP_LOGI(TAG, "Using default fine motor config");
     }
 
+    // Initialize TMC UART
+    esp_err_t ret = tmc_uart_init();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize TMC UART");
+        return ret;
+    }
+
+    // Initialize GPIO pins
+    ret = motor_gpio_init(MOTOR_COARSE);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    ret = motor_gpio_init(MOTOR_FINE);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    // Initialize TMC2209 drivers
+    ret = tmc2209_driver_init(MOTOR_COARSE, &coarse_tmc_driver, &coarse_motor_config);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Coarse motor TMC initialization failed - motor may not be connected");
+        // Don't return error - allow system to continue without motors
+    }
+
+    ret = tmc2209_driver_init(MOTOR_FINE, &fine_tmc_driver, &fine_motor_config);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Fine motor TMC initialization failed - motor may not be connected");
+        // Don't return error - allow system to continue without motors
+    }
+
+    ESP_LOGI(TAG, "Motors module initialized successfully");
     return ESP_OK;
 }
 
@@ -98,6 +227,13 @@ esp_err_t motors_save_config(motor_type_t motor, const motor_config_t *config)
             coarse_motor_config = config_to_save;
         } else {
             fine_motor_config = config_to_save;
+        }
+
+        // Reinitialize driver with new configuration
+        if (motor == MOTOR_COARSE) {
+            tmc2209_driver_init(MOTOR_COARSE, &coarse_tmc_driver, &coarse_motor_config);
+        } else {
+            tmc2209_driver_init(MOTOR_FINE, &fine_tmc_driver, &fine_motor_config);
         }
     }
 
@@ -145,18 +281,49 @@ esp_err_t motors_get_config(motor_type_t motor, motor_config_t *config)
     return ESP_OK;
 }
 
-// Motor control stubs (hardware implementation later)
+// Motor control implementation
 esp_err_t motor_set_speed(motor_type_t motor, float speed_rps)
 {
-    ESP_LOGI(TAG, "%s motor speed set to: %.3f rps (stub)",
+    // TODO: Implement MCPWM-based STEP signal generation
+    // For now, just log the request
+    ESP_LOGI(TAG, "%s motor speed set to: %.3f rps (MCPWM not yet implemented)",
              (motor == MOTOR_COARSE) ? "Coarse" : "Fine", speed_rps);
+
+    // Set direction pin based on speed sign
+    gpio_num_t dir_pin = (motor == MOTOR_COARSE) ? COARSE_MOTOR_DIR_PIN : FINE_MOTOR_DIR_PIN;
+    bool inverted = (motor == MOTOR_COARSE) ? coarse_motor_config.inverted_direction : fine_motor_config.inverted_direction;
+
+    bool direction = (speed_rps >= 0);
+    if (inverted) {
+        direction = !direction;
+    }
+
+    gpio_set_level(dir_pin, direction ? 1 : 0);
+
     return ESP_OK;
 }
 
 esp_err_t motor_enable(motor_type_t motor, bool enable)
 {
-    ESP_LOGI(TAG, "%s motor %s (stub)",
+    gpio_num_t en_pin;
+    bool inverted_enable;
+
+    if (motor == MOTOR_COARSE) {
+        en_pin = COARSE_MOTOR_EN_PIN;
+        inverted_enable = coarse_motor_config.inverted_enable;
+    } else {
+        en_pin = FINE_MOTOR_EN_PIN;
+        inverted_enable = fine_motor_config.inverted_enable;
+    }
+
+    // If inverted_enable: LOW = enabled, HIGH = disabled
+    // If normal: HIGH = enabled, LOW = disabled
+    bool pin_level = inverted_enable ? !enable : enable;
+    gpio_set_level(en_pin, pin_level ? 1 : 0);
+
+    ESP_LOGI(TAG, "%s motor %s",
              (motor == MOTOR_COARSE) ? "Coarse" : "Fine",
              enable ? "enabled" : "disabled");
+
     return ESP_OK;
 }
