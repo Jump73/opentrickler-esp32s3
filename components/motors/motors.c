@@ -17,7 +17,7 @@ static const char *TAG = "Motors";
 #define NVS_NAMESPACE "motors"
 #define NVS_KEY_COARSE "coarse"
 #define NVS_KEY_FINE "fine"
-#define CONFIG_VERSION 1
+#define CONFIG_VERSION 3
 
 // Motor driver instances
 static TMC2209_t coarse_tmc_driver;
@@ -39,7 +39,7 @@ static motor_config_t coarse_motor_config = {
     .config_version = CONFIG_VERSION,
     .full_steps_per_rotation = 200,
     .current_ma = 800,
-    .microsteps = 16,
+    .microsteps = 16,   // Matches hardware MS1/MS2 pin state (works without UART)
     .max_speed_rps = 10,
     .r_sense = 110,
     .angular_acceleration = 50.0f,
@@ -53,7 +53,7 @@ static motor_config_t fine_motor_config = {
     .config_version = CONFIG_VERSION,
     .full_steps_per_rotation = 200,
     .current_ma = 600,
-    .microsteps = 16,
+    .microsteps = 16,   // Matches hardware MS1/MS2 pin state (works without UART)
     .max_speed_rps = 5,
     .r_sense = 110,
     .angular_acceleration = 30.0f,
@@ -90,8 +90,10 @@ static esp_err_t motor_mcpwm_init(motor_type_t motor)
     }
 
     // Create MCPWM timer (initially 1 kHz, will be updated dynamically)
+    // Use separate groups: coarse=group1, fine=group0 (avoids resource conflicts)
+    int group_id = (motor == MOTOR_COARSE) ? 1 : 0;
     mcpwm_timer_config_t timer_config = {
-        .group_id = (motor == MOTOR_COARSE) ? 0 : 0,  // Both use group 0
+        .group_id = group_id,
         .clk_src = MCPWM_TIMER_CLK_SRC_DEFAULT,
         .resolution_hz = 10000000,  // 10 MHz resolution for precise timing
         .count_mode = MCPWM_TIMER_COUNT_MODE_UP,
@@ -101,7 +103,7 @@ static esp_err_t motor_mcpwm_init(motor_type_t motor)
 
     // Create MCPWM operator
     mcpwm_operator_config_t oper_config = {
-        .group_id = (motor == MOTOR_COARSE) ? 0 : 0,
+        .group_id = group_id,
     };
     ESP_ERROR_CHECK(mcpwm_new_operator(&oper_config, oper));
 
@@ -202,10 +204,10 @@ static esp_err_t tmc2209_driver_init(motor_type_t motor, TMC2209_t *driver, cons
     driver->config.hold_current_pct = 50;
     driver->config.microsteps = config->microsteps;
 
-    // Initialize driver communication
+    // Initialize driver communication (UART may not be available - non-fatal)
     if (!TMC2209_Init(driver)) {
-        ESP_LOGE(TAG, "Failed to initialize %s TMC2209 driver!",
-                 (motor == MOTOR_COARSE) ? "coarse" : "fine");
+        ESP_LOGW(TAG, "%s TMC2209 UART init failed - running without driver config",
+                 (motor == MOTOR_COARSE) ? "Coarse" : "Fine");
         return ESP_FAIL;
     }
 
@@ -222,20 +224,22 @@ esp_err_t motors_init(void)
 {
     ESP_LOGI(TAG, "Initializing motors module");
 
-    // Try to load saved configurations
+    // Try to load saved configurations (only if version matches)
     motor_config_t temp_config;
-    if (motors_load_config(MOTOR_COARSE, &temp_config) == ESP_OK) {
+    if (motors_load_config(MOTOR_COARSE, &temp_config) == ESP_OK
+            && temp_config.config_version == CONFIG_VERSION) {
         coarse_motor_config = temp_config;
         ESP_LOGI(TAG, "Loaded coarse motor config from NVS");
     } else {
-        ESP_LOGI(TAG, "Using default coarse motor config");
+        ESP_LOGI(TAG, "Using default coarse motor config (version mismatch or no saved config)");
     }
 
-    if (motors_load_config(MOTOR_FINE, &temp_config) == ESP_OK) {
+    if (motors_load_config(MOTOR_FINE, &temp_config) == ESP_OK
+            && temp_config.config_version == CONFIG_VERSION) {
         fine_motor_config = temp_config;
         ESP_LOGI(TAG, "Loaded fine motor config from NVS");
     } else {
-        ESP_LOGI(TAG, "Using default fine motor config");
+        ESP_LOGI(TAG, "Using default fine motor config (version mismatch or no saved config)");
     }
 
     // Initialize TMC UART

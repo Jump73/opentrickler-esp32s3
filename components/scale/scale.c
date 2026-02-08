@@ -170,7 +170,7 @@ static void scale_line_feed(void)
     for (char *p = line_buf; *p; p++) {
         float w = strtof(p, &endptr);
         if (endptr != p) {
-            ESP_LOGI(TAG, "Parsed weight: %.4f from '%s'", w, line_buf);
+            ESP_LOGD(TAG, "Parsed weight: %.4f from '%s'", w, line_buf);
             update_measurement(w);
             break;
         }

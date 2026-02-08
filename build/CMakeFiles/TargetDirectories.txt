@@ -660,6 +660,13 @@ C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/http_server/CMakeFiles
 C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/http_server/CMakeFiles/install.dir
 C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/http_server/CMakeFiles/install/local.dir
 C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/http_server/CMakeFiles/install/strip.dir
+C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/board_expansion/CMakeFiles/__idf_board_expansion.dir
+C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/board_expansion/CMakeFiles/edit_cache.dir
+C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/board_expansion/CMakeFiles/rebuild_cache.dir
+C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/board_expansion/CMakeFiles/list_install_components.dir
+C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/board_expansion/CMakeFiles/install.dir
+C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/board_expansion/CMakeFiles/install/local.dir
+C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/board_expansion/CMakeFiles/install/strip.dir
 C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/tmc_drivers/CMakeFiles/__idf_tmc_drivers.dir
 C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/tmc_drivers/CMakeFiles/edit_cache.dir
 C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/tmc_drivers/CMakeFiles/rebuild_cache.dir
@@ -730,13 +737,6 @@ C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/main/CMakeFiles/list_i
 C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/main/CMakeFiles/install.dir
 C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/main/CMakeFiles/install/local.dir
 C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/main/CMakeFiles/install/strip.dir
-C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/board_expansion/CMakeFiles/__idf_board_expansion.dir
-C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/board_expansion/CMakeFiles/edit_cache.dir
-C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/board_expansion/CMakeFiles/rebuild_cache.dir
-C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/board_expansion/CMakeFiles/list_install_components.dir
-C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/board_expansion/CMakeFiles/install.dir
-C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/board_expansion/CMakeFiles/install/local.dir
-C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/board_expansion/CMakeFiles/install/strip.dir
 C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/display_st7567/CMakeFiles/__idf_display_st7567.dir
 C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/display_st7567/CMakeFiles/edit_cache.dir
 C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build/esp-idf/display_st7567/CMakeFiles/rebuild_cache.dir

@@ -18,9 +18,11 @@ extern "C" {
 // ========== Motor Control Pins ==========
 
 // TMC UART (shared for both motors)
+// Single-wire half-duplex: TX and RX on same pin (GPIO15), same as original Pico design.
+// TMC2209 has one PDN_UART pin; TX drives the line, RX reads echo + TMC response.
 #define MOTOR_UART_NUM      UART_NUM_1
 #define MOTOR_UART_TX_PIN   GPIO_NUM_15
-#define MOTOR_UART_RX_PIN   GPIO_NUM_16
+#define MOTOR_UART_RX_PIN   GPIO_NUM_15
 
 // Coarse Trickler Motor (Motor 0)
 #define COARSE_MOTOR_ADDR   0

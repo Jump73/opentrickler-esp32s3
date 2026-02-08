@@ -107,13 +107,17 @@ void tmc_uart_write(trinamic_motor_t driver, TMC_uart_write_datagram_t *datagram
 
 /**
  * Read a register from TMC driver via UART
- * Sends read request, waits for response with proper sync byte detection
+ *
+ * Single-wire half-duplex UART: TX and RX share GPIO15 (same as original Pico design).
+ * Our 4-byte TX echo appears on RX first, then TMC sends 8-byte response.
+ * Total up to 12 bytes. Response identified by [0x05, 0xFF] header.
  *
  * Returns: Pointer to static response datagram, or NULL on error
  */
 TMC_uart_write_datagram_t *tmc_uart_read(trinamic_motor_t driver, TMC_uart_read_datagram_t *datagram)
 {
     static TMC_uart_write_datagram_t response = {0};
+    uint8_t buf[12];  // Up to 12 bytes: handles both echo+response and response-only cases
 
     if (!uart_initialized) {
         ESP_LOGE(TAG, "UART not initialized");
@@ -133,68 +137,34 @@ TMC_uart_write_datagram_t *tmc_uart_read(trinamic_motor_t driver, TMC_uart_read_
     uart_write_bytes(TMC_UART_NUM, datagram->data, sizeof(TMC_uart_read_datagram_t));
     uart_wait_tx_done(TMC_UART_NUM, pdMS_TO_TICKS(10));
 
-    // Wait for echo to finish transmitting (~320us at 250kbaud for 4 bytes)
-    // Add small delay to ensure we don't read our own echo
+    // Single-wire UART: echo of our TX + TMC response both arrive on RX (GPIO15).
+    // Total: 4 echo bytes + 8 response bytes = 12 bytes.
+    // Wait for all bytes to arrive (TX=160us + TMC response=320us + margin).
     vTaskDelay(pdMS_TO_TICKS(2));
 
-    // Read response - look for sync byte (0x05) and collect 8-byte response
-    uint8_t sync_byte = 0x05;
-    int idx = -1;
-    uint8_t byte;
-    int timeout_ms = 10;
-    int bytes_available;
-
-    // Wait for data with timeout
-    while (timeout_ms > 0) {
-        uart_get_buffered_data_len(TMC_UART_NUM, (size_t*)&bytes_available);
-        if (bytes_available > 0) {
-            break;
-        }
-        vTaskDelay(pdMS_TO_TICKS(1));
-        timeout_ms--;
-    }
-
-    if (timeout_ms == 0) {
-        ESP_LOGW(TAG, "TMC UART read timeout waiting for response");
+    // Read up to 12 bytes (works for both echo+response and response-only hardware)
+    int n = uart_read_bytes(TMC_UART_NUM, buf, sizeof(buf), pdMS_TO_TICKS(5));
+    if (n < 8) {
+        ESP_LOGW(TAG, "TMC[%d] timeout (got %d bytes, need 8)", driver.address, n);
         return NULL;
     }
 
-    // Read and parse response
-    int read_attempts = 100; // Limit attempts to prevent infinite loop
-    while (read_attempts-- > 0) {
-        int len = uart_read_bytes(TMC_UART_NUM, &byte, 1, pdMS_TO_TICKS(2));
-
-        if (len <= 0) {
-            break; // No more data
-        }
-
-        // Look for sync byte to start collecting response
-        if (byte == sync_byte && idx == -1) {
-            idx = 0;
-        }
-
-        // Collect response bytes
-        if (idx >= 0 && idx < 8) {
-            response.data[idx++] = byte;
-        }
-
-        // Complete response received
-        if (idx == 8) {
+    // Find response by looking for [0x05, 0xFF] header
+    // Echo starts with [0x05, driver_addr] (0 or 1), response with [0x05, 0xFF]
+    for (int i = 0; i <= n - 8; i++) {
+        if (buf[i] == 0x05 && buf[i + 1] == 0xFF) {
+            memcpy(response.data, &buf[i], 8);
             // Verify CRC
             uint8_t received_crc = response.msg.crc;
             tmc_uart_calc_crc(response.data, sizeof(TMC_uart_write_datagram_t));
-
             if (received_crc == response.msg.crc) {
-                // CRC valid
                 return &response;
-            } else {
-                ESP_LOGW(TAG, "TMC UART CRC mismatch (got 0x%02X, expected 0x%02X)",
-                         received_crc, response.msg.crc);
-                return NULL;
             }
+            ESP_LOGW(TAG, "TMC[%d] CRC mismatch (got 0x%02X, expected 0x%02X)",
+                     driver.address, received_crc, response.msg.crc);
         }
     }
 
-    ESP_LOGW(TAG, "TMC UART failed to receive complete response");
+    ESP_LOGW(TAG, "TMC[%d] no valid response found in %d bytes", driver.address, n);
     return NULL;
 }
