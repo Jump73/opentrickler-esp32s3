@@ -1,7 +1,7 @@
 {
     "version":            "1.1",
     "project_name":       "ot_esp32s3_tmp",
-    "project_version":    "c403c58-dirty",
+    "project_version":    "5ff2fe3-dirty",
     "project_path":       "C:/Users/kdzia/ESPRESS/opentrickler-esp32s3",
     "idf_path":           "C:/Espressif/frameworks/esp-idf",
     "build_dir":          "C:/Users/kdzia/ESPRESS/opentrickler-esp32s3/build",

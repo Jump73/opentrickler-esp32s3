@@ -25,10 +25,19 @@ void app_main(void)
     printf("APP: Chip: ESP32-S3\n");
     printf("APP: Minimal boot test OK!\n");
 
-    for(int i=0; i<10; i++) {
-        printf("APP: Boot counter: %d\n", i);
-        vTaskDelay(pdMS_TO_TICKS(500));
+    // --- TEST ENKODERA: logowanie stanów pinów przez 20 sekund ---
+    printf("\nAPP: ENCODER TEST - obracaj enkoderem i obserwuj zmiany\n");
+    gpio_set_direction(ENCODER_A_PIN, GPIO_MODE_INPUT);
+    gpio_set_direction(ENCODER_B_PIN, GPIO_MODE_INPUT);
+    gpio_set_direction(ENCODER_BTN_PIN, GPIO_MODE_INPUT);
+    for (int i = 0; i < 200; i++) {
+        int a = gpio_get_level(ENCODER_A_PIN);
+        int b = gpio_get_level(ENCODER_B_PIN);
+        int btn = gpio_get_level(ENCODER_BTN_PIN);
+        printf("ENCODER: A=%d, B=%d, BTN=%d\n", a, b, btn);
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
+    printf("APP: ENCODER TEST END\n\n");
 
     printf("APP: Now starting display test...\n");
     xTaskCreate(display_bus_test_task, "disp_test", 8192, NULL, 5, NULL);
