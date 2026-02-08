@@ -1,11 +1,11 @@
 #include "board_expansion.h"
+#include "board_pins.h"
 #include "driver/gpio.h"
 
-// --- Expansion board pin map ---
-#define M1_EN_GPIO   GPIO_NUM_6
-#define M2_EN_GPIO   GPIO_NUM_9
-#define M1_STEP_GPIO GPIO_NUM_3   // strap-safe during boot
-// --------------------------------
+// Use centralized pin definitions from board_pins.h
+#define M1_EN_GPIO   COARSE_MOTOR_EN_PIN
+#define M2_EN_GPIO   FINE_MOTOR_EN_PIN
+#define M1_STEP_GPIO COARSE_MOTOR_STEP_PIN
 
 void board_expansion_safe_init(void)
 {

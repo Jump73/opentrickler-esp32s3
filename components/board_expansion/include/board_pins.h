@@ -9,6 +9,7 @@
 #define BOARD_PINS_H_
 
 #include "driver/gpio.h"
+#include "driver/uart.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -18,56 +19,59 @@ extern "C" {
 
 // TMC UART (shared for both motors)
 #define MOTOR_UART_NUM      UART_NUM_1
-#define MOTOR_UART_TX_PIN   GPIO_NUM_4
-#define MOTOR_UART_RX_PIN   GPIO_NUM_5
+#define MOTOR_UART_TX_PIN   GPIO_NUM_15
+#define MOTOR_UART_RX_PIN   GPIO_NUM_16
 
 // Coarse Trickler Motor (Motor 0)
 #define COARSE_MOTOR_ADDR   0
-#define COARSE_MOTOR_EN_PIN GPIO_NUM_6
-#define COARSE_MOTOR_STEP_PIN GPIO_NUM_3
-#define COARSE_MOTOR_DIR_PIN GPIO_NUM_2
+#define COARSE_MOTOR_EN_PIN GPIO_NUM_17
+#define COARSE_MOTOR_STEP_PIN GPIO_NUM_14
+#define COARSE_MOTOR_DIR_PIN GPIO_NUM_13
 
 // Fine Trickler Motor (Motor 1)
 #define FINE_MOTOR_ADDR     1
-#define FINE_MOTOR_EN_PIN   GPIO_NUM_9
-#define FINE_MOTOR_STEP_PIN GPIO_NUM_8
-#define FINE_MOTOR_DIR_PIN  GPIO_NUM_7
+#define FINE_MOTOR_EN_PIN   GPIO_NUM_34
+#define FINE_MOTOR_STEP_PIN GPIO_NUM_33
+#define FINE_MOTOR_DIR_PIN  GPIO_NUM_18
 
-// ========== Display Pins (ST7567 SPI) ==========
+// ========== Display Pins (SPI) ==========
 
-// ST7567 128x64 LCD (SPI)
+// Mini12864 LCD (SPI)
 #define DISPLAY_SPI_NUM     SPI2_HOST
-#define DISPLAY_MOSI_PIN    GPIO_NUM_11
-#define DISPLAY_SCK_PIN     GPIO_NUM_12
-#define DISPLAY_CS_PIN      GPIO_NUM_13
-#define DISPLAY_DC_PIN      GPIO_NUM_14
-#define DISPLAY_RST_PIN     GPIO_NUM_15
+#define DISPLAY_MOSI_PIN    GPIO_NUM_2   // DISPLAY0_TX
+#define DISPLAY_SCK_PIN     GPIO_NUM_40  // DISPLAY0_SCK
+#define DISPLAY_CS_PIN      GPIO_NUM_39  // DISPLAY0_CS
+#define DISPLAY_DC_PIN      GPIO_NUM_4   // DISPLAY0_A0
+#define DISPLAY_RST_PIN     GPIO_NUM_5   // DISPLAY0_RESET
+#define DISPLAY_MISO_PIN    GPIO_NUM_38  // DISPLAY0_RX (usually NC)
 
 // ========== Rotary Encoder Pins ==========
 
-#define ENCODER_A_PIN       GPIO_NUM_16
-#define ENCODER_B_PIN       GPIO_NUM_17
-#define ENCODER_BTN_PIN     GPIO_NUM_18
+#define ENCODER_A_PIN       GPIO_NUM_35  // BUTTON0_ENCODER_PIN1
+#define ENCODER_B_PIN       GPIO_NUM_36  // BUTTON0_ENCODER_PIN2
+#define ENCODER_BTN_PIN     GPIO_NUM_6   // BUTTON0_ENC
+#define ENCODER_RST_PIN     GPIO_NUM_37  // BUTTON0_RST
 
 // ========== Scale Interface (UART) ==========
 
-#define SCALE_UART_NUM      UART_NUM_2
-#define SCALE_UART_RX_PIN   GPIO_NUM_19
-#define SCALE_UART_TX_PIN   GPIO_NUM_20
+#define SCALE_UART_NUM      UART_NUM_0
+#define SCALE_UART_TX_PIN   GPIO_NUM_11  // SCALE_UART_TX
+#define SCALE_UART_RX_PIN   GPIO_NUM_12  // SCALE_UART_RX
 
 // ========== NeoPixel LED ==========
 
-#define NEOPIXEL_PIN        GPIO_NUM_21
+#define NEOPIXEL_PIN        GPIO_NUM_9   // NEOPIXEL_PWM3
 #define NEOPIXEL_COUNT      2
 
 // ========== Servo Gate ==========
 
-#define SERVO_PWM_PIN       GPIO_NUM_22
+#define SERVO0_PWM_PIN      GPIO_NUM_8   // SERVO0_PWM (note: conflicts with EEPROM_SCL)
+#define SERVO1_PWM_PIN      GPIO_NUM_9   // SERVO1_PWM
 
-// ========== Other I/O ==========
+// ========== I2C EEPROM ==========
 
-// Additional GPIO available for future expansion
-// GPIO 1, 10, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42
+#define EEPROM_I2C_SDA_PIN  GPIO_NUM_7   // EEPROM_SDA
+#define EEPROM_I2C_SCL_PIN  GPIO_NUM_8   // EEPROM_SCL
 
 #ifdef __cplusplus
 }

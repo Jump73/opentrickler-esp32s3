@@ -2,6 +2,7 @@
 #include "motors.h"
 #include "esp_log.h"
 #include <string.h>
+#include <math.h>
 
 static const char *TAG = "CleanupMode";
 
@@ -43,8 +44,8 @@ esp_err_t cleanup_mode_set_speed(float speed)
     ESP_LOGI(TAG, "Setting trickler speed to: %.3f", speed);
     runtime_state.trickler_speed = speed;
 
-    // Enable motors if speed > 0, disable if speed == 0
-    if (speed > 0.001f) {
+    // Enable motors if speed != 0 (supports negative for reverse), disable if speed == 0
+    if (fabsf(speed) > 0.001f) {
         motor_enable(MOTOR_COARSE, true);
         motor_enable(MOTOR_FINE, true);
         motor_set_speed(MOTOR_COARSE, speed);

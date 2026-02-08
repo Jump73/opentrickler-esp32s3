@@ -15,11 +15,12 @@
 
 static const char *TAG = "TMC_UART";
 
-// UART configuration for TMC drivers
-#define TMC_UART_NUM        UART_NUM_1
+// UART configuration for TMC drivers (pins from board_pins.h)
+#include "board_pins.h"
+#define TMC_UART_NUM        MOTOR_UART_NUM
 #define TMC_UART_BAUD       250000
-#define TMC_UART_TX_PIN     GPIO_NUM_4
-#define TMC_UART_RX_PIN     GPIO_NUM_5
+#define TMC_UART_TX_PIN     MOTOR_UART_TX_PIN
+#define TMC_UART_RX_PIN     MOTOR_UART_RX_PIN
 #define TMC_UART_BUF_SIZE   1024
 
 static bool uart_initialized = false;

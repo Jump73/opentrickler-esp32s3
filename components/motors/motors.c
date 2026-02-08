@@ -1,4 +1,5 @@
 #include "motors.h"
+#include "board_pins.h"
 #include "esp_log.h"
 #include "nvs_flash.h"
 #include "nvs.h"
@@ -17,17 +18,6 @@ static const char *TAG = "Motors";
 #define NVS_KEY_COARSE "coarse"
 #define NVS_KEY_FINE "fine"
 #define CONFIG_VERSION 1
-
-// GPIO pin definitions (matching original Pico W pinout)
-#define COARSE_MOTOR_ADDR       0
-#define COARSE_MOTOR_EN_PIN     GPIO_NUM_6
-#define COARSE_MOTOR_STEP_PIN   GPIO_NUM_3
-#define COARSE_MOTOR_DIR_PIN    GPIO_NUM_2
-
-#define FINE_MOTOR_ADDR         1
-#define FINE_MOTOR_EN_PIN       GPIO_NUM_9
-#define FINE_MOTOR_STEP_PIN     GPIO_NUM_8
-#define FINE_MOTOR_DIR_PIN      GPIO_NUM_7
 
 // Motor driver instances
 static TMC2209_t coarse_tmc_driver;
@@ -56,7 +46,7 @@ static motor_config_t coarse_motor_config = {
     .min_speed_rps = 0.1f,
     .gear_ratio = 1.0f,
     .inverted_direction = false,
-    .inverted_enable = false
+    .inverted_enable = true   // TMC2209: EN is active-low (LOW = enabled)
 };
 
 static motor_config_t fine_motor_config = {
@@ -70,7 +60,7 @@ static motor_config_t fine_motor_config = {
     .min_speed_rps = 0.05f,
     .gear_ratio = 1.0f,
     .inverted_direction = false,
-    .inverted_enable = false
+    .inverted_enable = true   // TMC2209: EN is active-low (LOW = enabled)
 };
 
 /**
