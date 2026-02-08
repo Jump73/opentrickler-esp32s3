@@ -54,7 +54,7 @@ extern "C" {
 
 // ========== Scale Interface (UART) ==========
 
-#define SCALE_UART_NUM      UART_NUM_0
+#define SCALE_UART_NUM      UART_NUM_2   // UART0 is reserved for console
 #define SCALE_UART_TX_PIN   GPIO_NUM_11  // SCALE_UART_TX
 #define SCALE_UART_RX_PIN   GPIO_NUM_12  // SCALE_UART_RX
 

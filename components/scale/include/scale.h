@@ -50,10 +50,12 @@ esp_err_t scale_save_config(const scale_config_t *config);
 esp_err_t scale_load_config(scale_config_t *config);
 esp_err_t scale_get_config(scale_config_t *config);
 
-// Scale control (stubs for now - hardware implementation later)
+// Scale control
 esp_err_t scale_set_driver(scale_driver_t driver);
 esp_err_t scale_perform_action(scale_action_t action);
 float scale_get_measurement(void);
+bool scale_is_measurement_valid(void);
+bool scale_block_wait_for_measurement(uint32_t timeout_ms, float *measurement);
 
 #ifdef __cplusplus
 }

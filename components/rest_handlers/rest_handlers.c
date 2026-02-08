@@ -14,6 +14,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <math.h>
 
 static const char *TAG = "REST_Handlers";
 
@@ -448,6 +449,8 @@ char* rest_scale_config_handler(int num_params, char *params[], char *values[])
         if (strcmp(params[idx], "s0") == 0) {
             config.scale_driver = (scale_driver_t)atoi(values[idx]);
             scale_set_driver(config.scale_driver);
+            // Read back config - scale_set_driver may have auto-changed baudrate
+            scale_get_config(&config);
             config_changed = true;
         }
         else if (strcmp(params[idx], "s1") == 0) {
@@ -658,9 +661,14 @@ char* rest_charge_mode_state_handler(int num_params, char *params[], char *value
     // Get updated state for response
     charge_mode_get_runtime_state(&runtime_state);
 
-    // Format current weight (stub - would get from scale in real implementation)
+    // Format current weight directly from scale (charge_mode stub doesn't update it)
     char weight_string[16];
-    snprintf(weight_string, sizeof(weight_string), "%.3f", runtime_state.current_weight);
+    float scale_weight = scale_get_measurement();
+    if (!isnanf(scale_weight)) {
+        snprintf(weight_string, sizeof(weight_string), "%.3f", scale_weight);
+    } else {
+        snprintf(weight_string, sizeof(weight_string), "\"---\"");
+    }
 
     // Format elapsed time
     char elapsed_time_buffer[16];
