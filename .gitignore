@@ -31,6 +31,7 @@ test_output/
 *.tmp
 *.bak
 *.orig
+nul
 
 # Flash download tool
 flash_download_tool_*.exe

@@ -44,7 +44,7 @@ static motor_config_t coarse_motor_config = {
     .microsteps = 16,   // Matches hardware MS1/MS2 pin state (works without UART)
     .max_speed_rps = 10,
     .r_sense = 110,
-    .angular_acceleration = 50.0f,
+    .angular_acceleration = 10.0f,   // rev/s² - smooth ramp (0→3 rps in 0.3s)
     .min_speed_rps = 0.1f,
     .gear_ratio = 1.0f,
     .inverted_direction = false,
@@ -58,7 +58,7 @@ static motor_config_t fine_motor_config = {
     .microsteps = 16,   // Matches hardware MS1/MS2 pin state (works without UART)
     .max_speed_rps = 5,
     .r_sense = 110,
-    .angular_acceleration = 30.0f,
+    .angular_acceleration = 5.0f,    // rev/s² - smooth ramp (0→3 rps in 0.6s)
     .min_speed_rps = 0.05f,
     .gear_ratio = 1.0f,
     .inverted_direction = false,
@@ -386,7 +386,13 @@ esp_err_t motors_get_config(motor_type_t motor, motor_config_t *config)
     return ESP_OK;
 }
 
-// Motor control implementation
+// Speed ramping state
+static float coarse_current_speed = 0.0f;
+static float fine_current_speed = 0.0f;
+static TickType_t coarse_last_speed_tick = 0;
+static TickType_t fine_last_speed_tick = 0;
+
+// Motor control implementation with acceleration ramping
 esp_err_t motor_set_speed(motor_type_t motor, float speed_rps)
 {
     const motor_config_t *config;
@@ -394,6 +400,8 @@ esp_err_t motor_set_speed(motor_type_t motor, float speed_rps)
     mcpwm_cmpr_handle_t cmpr;
     gpio_num_t dir_pin;
     bool inverted;
+    float *current_speed;
+    TickType_t *last_tick;
 
     // Get motor configuration and MCPWM handles
     if (motor == MOTOR_COARSE) {
@@ -402,12 +410,16 @@ esp_err_t motor_set_speed(motor_type_t motor, float speed_rps)
         cmpr = coarse_mcpwm_cmpr;
         dir_pin = COARSE_MOTOR_DIR_PIN;
         inverted = coarse_motor_config.inverted_direction;
+        current_speed = &coarse_current_speed;
+        last_tick = &coarse_last_speed_tick;
     } else {
         config = &fine_motor_config;
         timer = fine_mcpwm_timer;
         cmpr = fine_mcpwm_cmpr;
         dir_pin = FINE_MOTOR_DIR_PIN;
         inverted = fine_motor_config.inverted_direction;
+        current_speed = &fine_current_speed;
+        last_tick = &fine_last_speed_tick;
     }
 
     // Set direction pin based on speed sign
@@ -418,20 +430,41 @@ esp_err_t motor_set_speed(motor_type_t motor, float speed_rps)
     gpio_set_level(dir_pin, direction ? 1 : 0);
 
     // Get absolute speed
-    float abs_speed_rps = fabsf(speed_rps);
+    float target_speed = fabsf(speed_rps);
 
     bool *running = (motor == MOTOR_COARSE) ? &coarse_mcpwm_running : &fine_mcpwm_running;
 
     // Stop motor if speed is too low or zero
-    if (abs_speed_rps < 0.001f) {
+    if (target_speed < 0.001f) {
         if (*running) {
             mcpwm_timer_start_stop(timer, MCPWM_TIMER_STOP_EMPTY);
             *running = false;
         }
+        *current_speed = 0.0f;
         ESP_LOGD(TAG, "%s motor stopped (speed=0)",
                  (motor == MOTOR_COARSE) ? "Coarse" : "Fine");
         return ESP_OK;
     }
+
+    // Apply acceleration ramp: limit speed change based on angular_acceleration
+    TickType_t now = xTaskGetTickCount();
+    float elapsed_s = (float)((now - *last_tick) * portTICK_PERIOD_MS) / 1000.0f;
+    if (elapsed_s > 1.0f) elapsed_s = 1.0f;  // Cap for first call or long gaps
+    *last_tick = now;
+
+    float max_change = config->angular_acceleration * elapsed_s;
+    float speed_diff = target_speed - *current_speed;
+
+    if (speed_diff > max_change) {
+        *current_speed += max_change;  // Accelerate
+    } else if (speed_diff < -max_change) {
+        *current_speed -= max_change;  // Decelerate
+    } else {
+        *current_speed = target_speed;  // Close enough, snap to target
+    }
+
+    float abs_speed_rps = *current_speed;
+    if (abs_speed_rps < 0.001f) abs_speed_rps = 0.001f;
 
     // Calculate STEP frequency: freq = speed_rps × full_steps × microsteps
     uint32_t steps_per_rev = config->full_steps_per_rotation * config->microsteps;
@@ -445,13 +478,9 @@ esp_err_t motor_set_speed(motor_type_t motor, float speed_rps)
 
     // Limit to valid range (minimum 10 ticks, maximum ~1M ticks)
     if (period_ticks < 10) {
-        period_ticks = 10;  // Max frequency ~1 MHz
-        ESP_LOGW(TAG, "%s motor speed too high, capping to max frequency",
-                 (motor == MOTOR_COARSE) ? "Coarse" : "Fine");
+        period_ticks = 10;
     } else if (period_ticks > 1000000) {
-        period_ticks = 1000000;  // Min frequency ~10 Hz
-        ESP_LOGW(TAG, "%s motor speed too low, capping to min frequency",
-                 (motor == MOTOR_COARSE) ? "Coarse" : "Fine");
+        period_ticks = 1000000;
     }
 
     // Update timer period (this changes the frequency)
@@ -466,9 +495,9 @@ esp_err_t motor_set_speed(motor_type_t motor, float speed_rps)
         *running = true;
     }
 
-    ESP_LOGD(TAG, "%s motor: speed=%.3f rps, step_freq=%.1f Hz, period=%lu ticks",
+    ESP_LOGD(TAG, "%s motor: target=%.3f actual=%.3f rps, freq=%.1f Hz",
              (motor == MOTOR_COARSE) ? "Coarse" : "Fine",
-             speed_rps, step_freq_hz, period_ticks);
+             target_speed, abs_speed_rps, step_freq_hz);
 
     return ESP_OK;
 }
