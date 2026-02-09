@@ -18,10 +18,10 @@ extern "C" {
 // ========== Motor Control Pins ==========
 
 // TMC UART (shared for both motors)
-// Single-wire open-drain half-duplex on GPIO16 (pin 7 = Pico GP5).
-// GPIO15 (pin 6) gave 0 bytes in all tests - may be 3V3_Out on this board.
+// TX on GPIO15 (pin 6 = Pico GP4), RX on GPIO16 (pin 7 = Pico GP5).
+// PCB: TX → resistor → TMC PDN_UART ← RX (standard TMC2209 single-wire circuit).
 #define MOTOR_UART_NUM      UART_NUM_1
-#define MOTOR_UART_TX_PIN   GPIO_NUM_16
+#define MOTOR_UART_TX_PIN   GPIO_NUM_15
 #define MOTOR_UART_RX_PIN   GPIO_NUM_16
 
 // Coarse Trickler Motor (Motor 0)

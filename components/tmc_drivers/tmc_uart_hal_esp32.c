@@ -1,20 +1,13 @@
 /*
- * tmc_uart_hal_esp32.c - Single-wire half-duplex UART HAL for TMC2209 on ESP32-S3
+ * tmc_uart_hal_esp32.c - UART HAL for TMC2209 on ESP32-S3
  *
- * TMC2209 uses single-wire UART (PDN_UART pin). On ESP32-S3, GPIO15 is used
- * for both TX and RX in open-drain mode:
+ * TMC2209 uses single-wire UART (PDN_UART pin). On the OpenTrickler PCB:
+ *   - MCU TX (GPIO15, pin 6) → resistor → TMC PDN_UART
+ *   - MCU RX (GPIO16, pin 7) ← direct  ← TMC PDN_UART
  *
- *   - UART TX output signal routed to GPIO15 (open-drain)
- *   - UART RX input signal manually routed from GPIO15
- *   - Open-drain means: LOW is actively driven, HIGH is released (pullup)
- *   - TMC can pull line LOW during response without bus contention
- *   - No GPIO direction switching needed at all
- *
- * The key issue with ESP32 same-pin TX/RX: uart_set_pin() for RX calls
- * gpio_set_direction(INPUT) which kills TX output. We avoid this by:
- *   1. Only passing TX pin to uart_set_pin (RX = UART_PIN_NO_CHANGE)
- *   2. Manually routing RX via esp_rom_gpio_connect_in_signal()
- *   3. Setting GPIO to INPUT_OUTPUT_OD (open-drain + input read)
+ * Standard UART with separate TX/RX pins. TX echo appears on RX because
+ * both are connected to the same TMC PDN_UART wire on the PCB.
+ * The echo bytes are skipped during read operations.
  */
 
 #include <string.h>
@@ -22,8 +15,6 @@
 #include "driver/gpio.h"
 #include "esp_log.h"
 #include "esp_rom_sys.h"
-#include "esp_rom_gpio.h"
-#include "soc/gpio_sig_map.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "common.h"
@@ -33,7 +24,8 @@ static const char *TAG = "TMC_UART";
 
 #define TMC_UART_NUM        MOTOR_UART_NUM
 #define TMC_UART_BAUD       250000
-#define TMC_UART_PIN        MOTOR_UART_TX_PIN   // GPIO15 - single wire, open-drain
+#define TMC_UART_TX_PIN     MOTOR_UART_TX_PIN   // GPIO15 (pin 6)
+#define TMC_UART_RX_PIN     MOTOR_UART_RX_PIN   // GPIO16 (pin 7)
 #define TMC_UART_BUF_SIZE   256
 
 static bool uart_initialized = false;
@@ -64,29 +56,9 @@ esp_err_t tmc_uart_init(void)
         return ESP_OK;
     }
 
-    ESP_LOGI(TAG, "=== TMC UART DIAGNOSTIC START (GPIO%d) ===", TMC_UART_PIN);
+    ESP_LOGI(TAG, "TMC UART init: TX=GPIO%d, RX=GPIO%d, baud=%d",
+             TMC_UART_TX_PIN, TMC_UART_RX_PIN, TMC_UART_BAUD);
 
-    // ── Diagnostic 1: Raw GPIO loopback ──
-    // Test if the pin is physically functional
-    gpio_reset_pin(TMC_UART_PIN);
-    gpio_set_direction(TMC_UART_PIN, GPIO_MODE_INPUT_OUTPUT);
-    gpio_pullup_dis(TMC_UART_PIN);
-    gpio_pulldown_dis(TMC_UART_PIN);
-
-    gpio_set_level(TMC_UART_PIN, 1);
-    esp_rom_delay_us(10);
-    int read_high = gpio_get_level(TMC_UART_PIN);
-
-    gpio_set_level(TMC_UART_PIN, 0);
-    esp_rom_delay_us(10);
-    int read_low = gpio_get_level(TMC_UART_PIN);
-
-    gpio_set_level(TMC_UART_PIN, 1);  // restore idle HIGH
-    ESP_LOGI(TAG, "GPIO%d loopback: write=1 read=%d, write=0 read=%d %s",
-             TMC_UART_PIN, read_high, read_low,
-             (read_high == 1 && read_low == 0) ? "OK" : "FAIL");
-
-    // ── UART setup ──
     uart_config_t uart_config = {
         .baud_rate = TMC_UART_BAUD,
         .data_bits = UART_DATA_8_BITS,
@@ -98,47 +70,28 @@ esp_err_t tmc_uart_init(void)
 
     ESP_ERROR_CHECK(uart_param_config(TMC_UART_NUM, &uart_config));
 
-    // Set ONLY TX pin. RX = NO_CHANGE to avoid gpio_set_direction(INPUT) killing TX.
-    ESP_ERROR_CHECK(uart_set_pin(TMC_UART_NUM, TMC_UART_PIN, UART_PIN_NO_CHANGE,
+    ESP_ERROR_CHECK(uart_set_pin(TMC_UART_NUM, TMC_UART_TX_PIN, TMC_UART_RX_PIN,
                                   UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
 
     ESP_ERROR_CHECK(uart_driver_install(TMC_UART_NUM, TMC_UART_BUF_SIZE,
                                         TMC_UART_BUF_SIZE, 0, NULL, 0));
 
-    // Manually route pin input to UART1 RX (without touching GPIO direction)
-    esp_rom_gpio_connect_in_signal(TMC_UART_PIN, U1RXD_IN_IDX, false);
+    ESP_LOGI(TAG, "UART%d ready", TMC_UART_NUM);
 
-    // Open-drain + input: allows TMC to also drive the bus
-    gpio_set_direction(TMC_UART_PIN, GPIO_MODE_INPUT_OUTPUT_OD);
-    gpio_pullup_en(TMC_UART_PIN);
-
-    ESP_LOGI(TAG, "UART%d configured: TX+RX on GPIO%d, baud=%d, open-drain",
-             TMC_UART_NUM, TMC_UART_PIN, TMC_UART_BAUD);
-
-    // ── Diagnostic 2: UART loopback test ──
-    // Send 0x55 (alternating bits) and check if echo comes back
+    // Echo test: TX→resistor→RX on same bus, 0x55 should echo back
     uart_flush_input(TMC_UART_NUM);
     uint8_t test_byte = 0x55;
-    int tx_ret = uart_write_bytes(TMC_UART_NUM, &test_byte, 1);
-    esp_err_t tx_done = uart_wait_tx_done(TMC_UART_NUM, pdMS_TO_TICKS(100));
+    uart_write_bytes(TMC_UART_NUM, &test_byte, 1);
+    uart_wait_tx_done(TMC_UART_NUM, pdMS_TO_TICKS(100));
 
-    ESP_LOGI(TAG, "UART TX test: write_ret=%d, wait_tx_done=%s",
-             tx_ret, (tx_done == ESP_OK) ? "OK" : "TIMEOUT");
-
-    // Small delay for byte to arrive in RX FIFO
     esp_rom_delay_us(500);
-
-    size_t buffered = 0;
-    uart_get_buffered_data_len(TMC_UART_NUM, &buffered);
 
     uint8_t rx_byte = 0;
     int rx_ret = uart_read_bytes(TMC_UART_NUM, &rx_byte, 1, pdMS_TO_TICKS(50));
 
-    ESP_LOGI(TAG, "UART RX test: buffered=%d, read_ret=%d, rx_byte=0x%02X %s",
-             buffered, rx_ret, rx_byte,
-             (rx_ret == 1 && rx_byte == 0x55) ? "LOOPBACK OK" : "NO ECHO");
-
-    ESP_LOGI(TAG, "=== TMC UART DIAGNOSTIC END ===");
+    ESP_LOGI(TAG, "Echo test: rx=%d byte=0x%02X %s",
+             rx_ret, rx_byte,
+             (rx_ret == 1 && rx_byte == 0x55) ? "OK" : "NO ECHO (check wiring)");
 
     uart_initialized = true;
     return ESP_OK;
