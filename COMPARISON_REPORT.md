@@ -1,6 +1,6 @@
 # OpenTrickler ESP32-S3 Port - Comprehensive Comparison Report
 
-**Report Date:** 2026-02-07
+**Report Date:** 2026-02-08 (Updated)
 **Original Project Location:** `C:\Users\kdzia\OpenTrickler_org-EAMARS`
 **ESP32-S3 Port Location:** `C:\Users\kdzia\ESPRESS\opentrickler-esp32s3`
 
@@ -54,7 +54,7 @@ The port follows these specific implementation requirements:
 
 This report compares the original OpenTrickler project (Raspberry Pi Pico W) with the ESP32-S3 port, documenting what functionality exists, what's complete, what's partially implemented, and what's missing.
 
-**Estimated Completion:** 40-50% of original functionality ported. The project has a solid foundation for web-based configuration, but needs significant work on hardware drivers and application logic to become a functional powder dispenser.
+**Estimated Completion:** ~55-60% of original functionality ported. Motors spin with MCPWM + acceleration ramp, GNG JJB scale reads weight, charge mode state machine runs, encoder + display SPI work. **Blocking issue:** TMC2209 UART communication (0 bytes RX) prevents current/microstep configuration. See Section 11 for detailed debug log.
 
 ---
 
@@ -64,8 +64,8 @@ This report compares the original OpenTrickler project (Raspberry Pi Pico W) wit
 
 | Guideline | Status | Implementation Notes |
 |-----------|--------|---------------------|
-| **Replace u8g2 with LVGL** | ❌ **Not Started** | u8g2 not integrated yet, LVGL not added |
-| **Replace PIO motors with PWM** | ⏳ **Partial** | Basic MCPWM test exists, no full motor control |
+| **Replace u8g2 with LVGL** | ❌ **Not Started** | SPI driver works, LVGL not added yet |
+| **Replace PIO motors with PWM** | ✅ **Complete** | MCPWM variable-speed + acceleration ramp working |
 | **Replace PIO LEDs with led_strip** | ❌ **Not Started** | Config exists, no driver integrated |
 | **Use ESP-IDF RESTful Server** | ⏳ **Custom Implementation** | Custom REST handler system (works, but not ESP-IDF example) |
 | **Add ESP Provisioning Tool** | ❌ **Not Started** | Using custom wizard, no BLE/SoftAP provisioning |
@@ -84,14 +84,13 @@ This report compares the original OpenTrickler project (Raspberry Pi Pico W) wit
   - Port menu system to LVGL
 
 #### 2. Motor Control (PIO → PWM)
-- **Current State:** Basic MCPWM STEP test (100 Hz fixed)
+- **Current State:** MCPWM variable-speed STEP generation + software acceleration ramp
 - **Original:** PIO state machines for precise timing
-- **Target:** MCPWM or LEDC with software timing
-- **Priority:** CRITICAL - Core functionality
-- **Action Required:**
-  - Implement velocity control with MCPWM
-  - Add acceleration profiles
-  - Port TMC driver library
+- **Target:** MCPWM with software timing ← **DONE**
+- **Priority:** ✅ Core motor control working
+- **Remaining:**
+  - Fix TMC UART for current/microstep config (see Section 11)
+  - Add PID-based dynamic speed control
 
 #### 3. LED Control (PIO → led_strip)
 - **Current State:** Configuration storage only
@@ -148,37 +147,45 @@ This report compares the original OpenTrickler project (Raspberry Pi Pico W) wit
 
 | Feature | Original (Pico W) | ESP32-S3 Port | Status |
 |---------|-------------------|---------------|---------|
-| **Motor Driver Library** | ✅ Trinamic TMC library (SPI/UART) | ❌ Not ported | ❌ **Missing** |
-| **Step Generation** | ✅ PIO-based (Pico SDK) | ⏳ MCPWM-based (basic test) | 🔧 **Partial - Hardware only** |
+| **Motor Driver Library** | ✅ Trinamic TMC library (SPI/UART) | ⏳ TMC2209 library ported, UART HAL written | ⚠️ **UART RX blocked** |
+| **Step Generation** | ✅ PIO-based (Pico SDK) | ✅ MCPWM-based (variable speed) | ✅ **Complete** |
 | **Direction Control** | ✅ GPIO control | ✅ GPIO control | ✅ **Complete** |
-| **Enable Control** | ✅ GPIO control | ✅ GPIO control | ✅ **Complete** |
-| **UART Communication** | ✅ TMC UART driver | ❌ Not implemented | ❌ **Missing** |
-| **Current/Microstep Config** | ✅ TMC register control | ❌ Not implemented | ❌ **Missing** |
-| **Acceleration Control** | ✅ PID-based velocity ramping | ❌ Not implemented | ❌ **Missing** |
-| **Motor Config (NVS)** | ✅ Full config saved to EEPROM | ✅ Full config saved to NVS | ✅ **Complete** |
+| **Enable Control** | ✅ GPIO control (active-low) | ✅ GPIO control (inverted_enable=true) | ✅ **Complete** |
+| **UART Communication** | ✅ TMC UART driver (single-wire) | ⏳ HAL written, open-drain approach | ⚠️ **RX 0 bytes - See Section 11** |
+| **Current/Microstep Config** | ✅ TMC register control | ⏳ Microsteps=16 (hardware MS pins), no UART config | ⏳ **Partial** |
+| **Acceleration Control** | ✅ PID-based velocity ramping | ✅ Software acceleration ramp | ✅ **Complete** |
+| **Motor Config (NVS)** | ✅ Full config saved to EEPROM | ✅ Full config saved to NVS (CONFIG_VERSION=3) | ✅ **Complete** |
+| **MCPWM Group Separation** | N/A (PIO) | ✅ Coarse=MCPWM_GROUP1, Fine=MCPWM_GROUP0 | ✅ **Complete** |
 
 **Implementation Files:**
-- **Original:** `src/motors.h`, TMC library integration via PIO
-- **ESP32-S3:** `components/motors/` (config only), `components/motors_mcpwm/` (basic STEP test)
+- **Original:** `src/motors.h`, `src/motors.c`, TMC library integration via PIO
+- **ESP32-S3:** `components/motors/motors.c` (config + MCPWM + TMC init), `components/tmc_drivers/tmc_uart_hal_esp32.c` (UART HAL)
 
 **What Works:**
-- ✅ Basic STEP pulse generation at fixed frequency (100 Hz test)
-- ✅ GPIO direction and enable pins
-- ✅ Configuration storage and retrieval
+- ✅ MCPWM-based STEP pulse generation with variable speed (set_speed_rps API)
+- ✅ Software acceleration ramp: COARSE_START_RPS=0.3 → COARSE_SPEED_RPS=0.4 at 0.02 rps/tick
+- ✅ GPIO direction, enable pins (active-low for TMC2209)
+- ✅ MCPWM group separation (coarse/fine on different groups to avoid resource conflicts)
+- ✅ Configuration storage (CONFIG_VERSION=3, microsteps=16, current_ma=800)
+- ✅ TMC2209 library compiled and linked
+- ✅ TMC UART HAL: CRC calculation, read/write datagram formatting
 
-**What's Missing:**
-- ❌ TMC driver communication (SPI/UART)
-- ❌ Real-time speed control with acceleration
-- ❌ Microstep configuration
-- ❌ Current control
-- ❌ Motor velocity task/queue system
+**What's Blocked (TMC UART):**
+- ⚠️ UART RX receives 0 bytes even when TX sends on same GPIO16 pin
+- ⚠️ GPIO16 raw loopback works (pin is functional), UART TX sends OK, but UART RX gets nothing
+- ⚠️ Root cause: likely ESP32 GPIO matrix `oen_sel` conflict between UART peripheral and GPIO controller
+- ⚠️ See **Section 11** for full debug history and next steps
 
 ---
 
+
 ### 2.2 Scale Drivers (Serial Communication)
+
 
 | Scale Driver | Original | ESP32-S3 Port | Status |
 |--------------|----------|---------------|---------|
+
+| **GNG JJB** | ✅ Implemented | ✅ Implemented | ✅ **Complete** |
 | **AND FXi** | ✅ Implemented | ⏳ Enum defined, no driver | ❌ **Missing** |
 | **Steinberg SBS** | ✅ Implemented | ⏳ Enum defined, no driver | ❌ **Missing** |
 | **GNG JJB** | ✅ Implemented | ⏳ Enum defined, no driver | ❌ **Missing** |
@@ -191,19 +198,19 @@ This report compares the original OpenTrickler project (Raspberry Pi Pico W) wit
 
 **Implementation Files:**
 - **Original:** `src/scale.h`, individual scale driver files (`and_scale.c`, etc.)
-- **ESP32-S3:** `components/scale/`, `components/scale_generic/` (simulator)
+- **ESP32-S3:** `components/scale/`, `components/scale_generic/`
 
 **What Works:**
 - ✅ Scale configuration storage (driver type, baudrate)
+- ✅ GNG JJB scale driver: UART communication (8N1), weight parsing, tare/calibration commands, update task
+- ✅ Scale UART fix: changed from 7N1 to 8N1 frame format (original Pico code had wrong setting)
+- ✅ Verbose scale logging reduced (was flooding console at ~10 lines/sec)
 - ✅ Generic scale simulator (for testing)
-- ✅ Basic scale API structure
+- ✅ Basic scale API structure (get_weight, tare, calibrate)
 
 **What's Missing:**
-- ❌ UART communication with actual scales
-- ❌ Protocol parsers for all 8 scale types
-- ❌ Weight measurement reading and filtering
-- ❌ Scale action commands (tare, calibration)
-- ❌ Real-time weight update task
+- ❌ Other scale drivers (AND FXi, Steinberg SBS, USSolid JFDBS, JM Science, Creedmoor, Radwag PS-R2, Sartorius)
+- ❌ Protocol parsers for the above models
 
 ---
 
@@ -314,31 +321,35 @@ This report compares the original OpenTrickler project (Raspberry Pi Pico W) wit
 
 | Feature | Original (Pico W) | ESP32-S3 Port | Status |
 |---------|-------------------|---------------|---------|
-| **State Machine** | ✅ 5 states (EXIT, WAIT_ZERO, COMPLETE, etc.) | ✅ States defined | ⏳ **Partial** |
-| **PID Control** | ✅ Dual PID (coarse/fine) | ❌ Not implemented | ❌ **Missing** |
-| **Weight Monitoring** | ✅ Real-time scale reading | ❌ Stub only | ❌ **Missing** |
-| **Motor Control** | ✅ Automatic speed adjustment | ❌ Not implemented | ❌ **Missing** |
-| **Precharge Mode** | ✅ Fast initial dispense | ⏳ Config stored | ❌ **Missing** |
-| **Threshold Detection** | ✅ Coarse/fine stop thresholds | ⏳ Config stored | ❌ **Missing** |
+| **State Machine** | ✅ 5 states (EXIT, WAIT_ZERO, COMPLETE, etc.) | ✅ Full state machine running | ✅ **Complete** |
+| **PID Control** | ✅ Dual PID (coarse/fine) | ⏳ Threshold-based (no PID yet) | ⏳ **Partial** |
+| **Weight Monitoring** | ✅ Real-time scale reading | ✅ Reads from GNG JJB scale | ✅ **Complete** |
+| **Motor Control** | ✅ Automatic speed adjustment | ✅ Coarse/fine with acceleration ramp | ✅ **Complete** |
+| **Precharge Mode** | ✅ Fast initial dispense | ⏳ Config stored, not implemented | ❌ **Missing** |
+| **Threshold Detection** | ✅ Coarse/fine stop thresholds | ✅ Uses charge_mode_config thresholds | ✅ **Complete** |
 | **LED Feedback** | ✅ Color indicates state | ❌ Not implemented | ❌ **Missing** |
 | **Display Rendering** | ✅ Real-time weight/timer display | ❌ Not implemented | ❌ **Missing** |
 | **Configuration** | ✅ Full config in EEPROM | ✅ Full config in NVS | ✅ **Complete** |
+| **Stability Detection** | ✅ Part of state machine | ✅ Configurable stable counts & tolerances | ✅ **Complete** |
+| **Cup Remove/Return** | ✅ Detect empty cup removal | ✅ Threshold-based detection | ✅ **Complete** |
 
 **Implementation Files:**
 - **Original:** `src/charge_mode.cpp`, `src/charge_mode.h`
-- **ESP32-S3:** `components/charge_mode/`
+- **ESP32-S3:** `components/charge_mode/charge_mode.c`, `components/charge_mode/include/charge_mode.h`
 
 **What Works:**
+- ✅ Full state machine: WAIT_FOR_ZERO → DISPENSING (coarse) → DISPENSING (fine) → SETTLING → COMPLETE → CUP_REMOVED → WAIT_FOR_ZERO
+- ✅ Coarse motor runs at 0.4 rps with acceleration ramp (start 0.3 rps, +0.02 rps/tick)
+- ✅ Fine motor runs at 0.2 rps with acceleration ramp (start 0.05 rps)
+- ✅ Scale weight integration (reads GNG JJB in real time)
+- ✅ Stability detection: ZERO_STABLE_COUNT=20, SETTLE_STABLE_COUNT=10
+- ✅ Cup removal detection (threshold: -0.3g)
 - ✅ Configuration storage (thresholds, colors, precharge settings)
-- ✅ State enumeration
-- ✅ Runtime state structure
-- ✅ URL-encoded hex color parsing
+- ✅ FreeRTOS task with 50ms tick period
 
 **What's Missing:**
-- ❌ Actual charge loop execution
-- ❌ PID controller integration
-- ❌ Scale reading integration
-- ❌ Motor control integration
+- ❌ PID controller (currently fixed speed, not dynamic)
+- ❌ Precharge mode (fast initial dispense)
 - ❌ Display updates
 - ❌ LED status updates
 
@@ -506,78 +517,70 @@ This report compares the original OpenTrickler project (Raspberry Pi Pico W) wit
 
 ## 6. Missing Components - Prioritized List
 
-### 6.1 Critical (Blocks Basic Functionality)
+### 6.1 Critical (Blocks Core Functionality)
 
-1. ❌ **TMC Motor Driver Communication**
-   - Location: `components/motors/`
-   - Need: SPI/UART TMC library port
-   - Impact: Cannot control motors beyond basic STEP pulses
+1. ⚠️ **TMC UART RX Signal Routing** ← **CURRENT BLOCKER**
+   - Location: `components/tmc_drivers/tmc_uart_hal_esp32.c`
+   - Problem: UART TX sends on GPIO16, but UART RX gets 0 bytes on same pin
+   - Impact: Cannot configure TMC2209 current/microsteps/stealthChop via UART
+   - See: **Section 11** for full debug history and next steps
 
-2. ❌ **Scale Serial Drivers**
-   - Location: `components/scale/`
-   - Need: UART protocol parsers for 8 scale types
-   - Impact: Cannot read weight from real scales
-
-3. ❌ **Display Graphics Integration**
+2. ❌ **Display Graphics Integration (LVGL)**
    - Location: `components/display_st7567/`
-   - Need: u8g2 library integration
-   - Impact: Cannot show UI, weight, or status
+   - Need: Add LVGL library, create ST7567 display driver for LVGL
+   - Impact: Cannot show UI, weight, or status on LCD
 
-4. ❌ **Charge Mode Execution Logic**
-   - Location: `components/charge_mode/`
-   - Need: PID control loop, motor integration
-   - Impact: Core auto-dispense feature non-functional
+3. ❌ **Scale Serial Drivers (other models)**
+   - Location: `components/scale/`
+   - Need: UART protocol parsers for AND FXi, Steinberg SBS, USSolid JFDBS, JM Science, Creedmoor, Radwag PS-R2, Sartorius
+   - Impact: Only GNG JJB scale works
 
 ### 6.2 High Priority (Essential Features)
 
-5. ❌ **Menu System (MUI)**
+4. ❌ **Menu System (MUI → LVGL)**
    - Location: New component needed
-   - Need: Port MUI library + integration
-   - Impact: Cannot navigate settings or modes
+   - Need: LVGL-based menu system (replaces u8g2 MUI)
+   - Impact: Cannot navigate settings or modes via LCD+encoder
 
-6. ❌ **NeoPixel LED Driver**
+5. ❌ **NeoPixel LED Driver**
    - Location: `components/neopixel_led/`
-   - Need: RMT or SPI-based WS2812 driver
+   - Need: RMT-based WS2812 driver (espressif/led_strip component)
    - Impact: No visual status feedback
 
-7. ❌ **Servo Gate Control**
+6. ❌ **Servo Gate Control**
    - Location: `components/servo_gate/`
    - Need: LEDC PWM servo driver
    - Impact: Cannot automate powder funnel gate
 
-8. ❌ **Motor Acceleration/PID Control**
-   - Location: `components/motors/`
-   - Need: Velocity ramping, PID integration
-   - Impact: Jerky motor movement, poor dispense control
+7. ⏳ **Charge Mode PID Control**
+   - Location: `components/charge_mode/`
+   - Need: Dynamic speed adjustment based on weight delta (replaces fixed speeds)
+   - Impact: Less precise dispensing than original
 
 ### 6.3 Medium Priority (Enhanced Functionality)
 
-9. ⏳ **Display Buffer Mirroring**
+8. ⏳ **Display Buffer Mirroring**
    - Location: `components/display_st7567/` + REST handler
    - Need: Export framebuffer as bitmap
    - Impact: Cannot view display remotely
 
-10. ❌ **Button REST Override**
-    - Location: `components/input_encoder/` + REST
-    - Need: REST API to simulate button presses
-    - Impact: Cannot control from web without buttons
+9. ❌ **Button REST Override**
+   - Location: `components/input_encoder/` + REST
+   - Need: REST API to simulate button presses
+   - Impact: Cannot control from web without buttons
 
-11. ⏳ **Scale Calibration**
-    - Location: `components/scale/`
-    - Need: External weight calibration routine
-    - Impact: Cannot calibrate scale via UI
-
-### 6.4 Low Priority (Nice to Have)
-
-12. ❌ **Cleanup Mode Motor Control**
+10. ❌ **Cleanup Mode Motor Control**
     - Location: `components/cleanup_mode/`
     - Need: Link to motor control
     - Impact: Manual trickler mode non-functional
 
-13. ❌ **Display Rotation Configuration**
-    - Location: `components/display_st7567/`
-    - Need: Config parameter + u8g2 rotation
-    - Impact: Fixed display orientation
+### 6.4 Low Priority (Nice to Have)
+
+11. ❌ **Display Rotation Configuration**
+    - Depends on LVGL integration
+
+12. ❌ **ESP Provisioning Tool**
+    - BLE/SoftAP provisioning via mobile app (current web wizard works)
 
 ---
 
@@ -587,29 +590,32 @@ This report compares the original OpenTrickler project (Raspberry Pi Pico W) wit
 
 1. **WiFi Management** - Can connect to WiFi (STA) or create AP
 2. **HTTP Server** - Serves web pages and REST API
-3. **NVS Configuration Storage** - All config modules save/load correctly
+3. **NVS Configuration Storage** - All config modules save/load correctly (CONFIG_VERSION tracked)
 4. **Profile System** - Full CRUD via REST API
 5. **System Control** - Reboot, save all settings, erase NVS
 6. **Web UI Pages** - Portal, wizard, and display mirror HTML served
 7. **REST API Endpoints** - All endpoints registered and parse parameters
+8. **Motor STEP Generation** - MCPWM variable-speed STEP pulses with acceleration ramp
+9. **Motor Direction/Enable** - GPIO control with active-low enable (TMC2209)
+10. **GNG JJB Scale** - UART 8N1 communication, weight reading, tare/calibration
+11. **Charge Mode State Machine** - Full dispense cycle: zero-wait → coarse → fine → settle → complete → cup-remove
+12. **Input Encoder** - Rotation + button press detection working
 
 ### ⏳ Partially Working Components
 
-1. **Motors** - Basic STEP generation at fixed frequency (test only)
-2. **Scale** - Generic simulator for testing (no real hardware)
-3. **Input Encoder** - Hardware driver works, not integrated
-4. **Display** - SPI communication works, no graphics library
-5. **Charge/Cleanup Mode** - Configuration stored, no execution logic
+1. **TMC2209 UART** - HAL written with open-drain approach, TX sends OK, **RX gets 0 bytes** (blocking issue)
+2. **Display** - SPI communication works, no graphics library (LVGL not yet added)
+3. **Charge Mode PID** - Currently uses fixed speeds + thresholds, no dynamic PID control
+4. **Cleanup Mode** - Configuration stored, basic state machine, no motor integration
 
 ### ❌ Non-Functional Components
 
-1. **TMC Motor Drivers** - No communication with drivers
-2. **Real Scale Hardware** - No serial protocol parsers
-3. **Menu System** - Completely missing
-4. **NeoPixel LEDs** - No WS2812 driver
-5. **Servo Gate** - Empty component
-6. **PID Control** - Not implemented
-7. **Display Rendering** - No graphics output
+1. **TMC UART RX** - Cannot read TMC registers (blocks current/microstep configuration)
+2. **Menu System** - Completely missing (needs LVGL first)
+3. **NeoPixel LEDs** - No WS2812/RMT driver
+4. **Servo Gate** - Empty component
+5. **Display Rendering** - No graphics output (needs LVGL)
+6. **Other Scale Drivers** - Only GNG JJB works; AND FXi, Steinberg, etc. not ported
 
 ---
 
@@ -617,46 +623,69 @@ This report compares the original OpenTrickler project (Raspberry Pi Pico W) wit
 
 ### 🔧 GPIO Pin Mapping Status
 
-| Original Pin Assignment | ESP32-S3 Mapping | Status |
-|------------------------|------------------|---------|
-| **Display SPI** | GPIO pins assigned | ✅ Tested |
-| **Encoder** | GPIO pins assigned | ✅ Tested |
-| **Coarse Motor** | STEP=GPIO3 (strap pin!), DIR=GPIO7, EN=? | ⚠️ **Needs boot delay** |
-| **Fine Motor** | Not mapped yet | ❌ Missing |
-| **Scale UART** | Not configured | ❌ Missing |
-| **Motor UART** | Not configured | ❌ Missing |
-| **NeoPixel** | Not configured | ❌ Missing |
-| **Servo PWM** | Not configured | ❌ Missing |
+All pins are defined in `components/board_expansion/include/board_pins.h`.
+Reference mapping: `PIN_MAPPING_TABLE.txt` and `PICO_W-ESP32_S3_PICO_PIN_MAPPING.md`.
 
-**Critical Note:** GPIO3 is a strapping pin on ESP32-S3. The current implementation has a boot delay guard to prevent issues.
+| Function | ESP32-S3 GPIO | Physical Pin | Status |
+|----------|--------------|--------------|---------|
+| **Display MOSI** | GPIO2 | Pin 25 (GP19) | ✅ Tested |
+| **Display SCK** | GPIO40 | Pin 20 (GP15) | ✅ Tested |
+| **Display CS** | GPIO39 | Pin 19 (GP14) | ✅ Tested |
+| **Display DC/A0** | GPIO4 | Pin 26 (GP20) | ✅ Tested |
+| **Display RST** | GPIO5 | Pin 27 (GP21) | ✅ Tested |
+| **Display MISO** | GPIO38 | Pin 17 (GP13) | ✅ Assigned (NC) |
+| **Encoder A** | GPIO35 | Pin 14 (GP10) | ✅ Tested |
+| **Encoder B** | GPIO36 | Pin 15 (GP11) | ✅ Tested |
+| **Encoder BTN** | GPIO6 | Pin 29 (GP22) | ✅ Tested |
+| **Encoder RST** | GPIO37 | Pin 16 (GP12) | ✅ Assigned |
+| **Coarse STEP** | GPIO14 | Pin 5 (GP03) | ✅ Working (MCPWM) |
+| **Coarse DIR** | GPIO13 | Pin 4 (GP02) | ✅ Working |
+| **Coarse EN** | GPIO17 | Pin 9 (GP06) | ✅ Working |
+| **Fine STEP** | GPIO33 | Pin 11 (GP08) | ✅ Working (MCPWM) |
+| **Fine DIR** | GPIO18 | Pin 10 (GP07) | ✅ Working |
+| **Fine EN** | GPIO34 | Pin 12 (GP09) | ✅ Working |
+| **TMC UART TX/RX** | GPIO16 | Pin 7 (GP05) | ⚠️ **TX OK, RX 0 bytes** |
+| **~~TMC UART (old)~~** | ~~GPIO15~~ | ~~Pin 6~~ | ❌ **3V3_Out - NOT usable GPIO!** |
+| **Scale UART TX** | GPIO11 | Pin 1 (GP00) | ✅ Working (8N1) |
+| **Scale UART RX** | GPIO12 | Pin 2 (GP01) | ✅ Working |
+| **NeoPixel** | GPIO9 | Pin 34 (GP28) | ⏳ Assigned, not tested |
+| **Servo0 PWM** | GPIO8 | Pin 32 (GP27) | ⏳ Assigned |
+| **Servo1 PWM** | GPIO9 | Pin 34 (GP28) | ⏳ Assigned (conflicts NeoPixel) |
+| **EEPROM SDA** | GPIO7 | Pin 31 (GP26) | ⏳ Assigned |
+| **EEPROM SCL** | GPIO8 | Pin 32 (GP27) | ⏳ Assigned |
+
+**Critical Notes:**
+- GPIO15 (Pin 6) is **3V3_Out** on ESP32-S3-PICO-V3-02 - NOT a usable GPIO! All early TMC UART attempts on this pin gave 0 bytes.
+- UART allocation: UART0=console, UART1=TMC motors, UART2=scale
+- MCPWM allocation: GROUP0=fine motor, GROUP1=coarse motor (separated to avoid resource conflicts)
 
 ---
 
 ## 9. Recommended Next Steps
 
-### Phase 1: Core Hardware (Weeks 1-2)
-1. Port TMC motor driver library (SPI/UART communication)
-2. Implement proper MCPWM motor control with acceleration
-3. Port at least one scale driver (e.g., AND FXi or Generic)
-4. Integrate u8g2 graphics library with ST7567 display
+### Immediate: Fix TMC UART RX (Blocking Issue)
+1. **Try `uart_set_loop_back(UART1, true)`** - ESP-IDF API for internal loopback testing
+2. **Try UART2 instead of UART1** - rule out UART peripheral conflict
+3. **Force `oen_sel=1`** via direct register write to `GPIO_FUNCn_OUT_SEL_CFG_REG`
+4. **Try push-pull instead of open-drain** - test if issue is OD-specific
+5. **Check `func_out_sel_cfg`** register to verify UART TX output signal is correctly routed
 
-### Phase 2: Application Logic (Weeks 3-4)
-5. Implement charge mode PID control loop
-6. Link motor control to charge mode
-7. Add scale reading integration to charge mode
-8. Port NeoPixel driver (RMT or SPI-based)
+### Phase 1: Display + LVGL
+1. Add LVGL to components
+2. Create ST7567 display driver for LVGL
+3. Port basic weight/status display
+4. Integrate encoder with LVGL input driver
 
-### Phase 3: User Interface (Weeks 5-6)
-9. Port MUI menu system
-10. Create main menu and settings screens
-11. Integrate encoder input with menu system
-12. Add display buffer mirroring for web UI
+### Phase 2: Remaining Drivers
+5. NeoPixel LED driver (RMT/led_strip)
+6. Servo gate control (LEDC PWM)
+7. Additional scale drivers (AND FXi, Steinberg, etc.)
 
-### Phase 4: Advanced Features (Weeks 7-8)
-13. Implement servo gate control (LEDC PWM)
-14. Add cleanup mode motor control
-15. Port remaining scale drivers
-16. Add scale calibration routine
+### Phase 3: UI & Polish
+8. LVGL-based menu system
+9. Charge mode PID control
+10. Cleanup mode motor integration
+11. Display buffer mirroring for web UI
 
 ---
 
@@ -684,12 +713,13 @@ OpenTrickler_org-EAMARS/
 ```
 opentrickler-esp32s3/
 ├── components/            # ESP-IDF components
-│   ├── charge_mode/       # ⏳ Config only
+│   ├── charge_mode/       # ✅ Full state machine + motor/scale integration
 │   ├── cleanup_mode/      # ⏳ Config only
-│   ├── motors/            # ⏳ Config only
-│   ├── motors_mcpwm/      # ⏳ Basic STEP test
-│   ├── scale/             # ⏳ Config only
+│   ├── motors/            # ✅ MCPWM + acceleration + TMC init
+│   ├── tmc_drivers/       # ⏳ TMC2209 lib + UART HAL (RX blocked)
+│   ├── scale/             # ✅ GNG JJB driver working
 │   ├── scale_generic/     # ⏳ Simulator only
+│   ├── board_expansion/   # ✅ Pin definitions (board_pins.h)
 │   ├── display_st7567/    # ⏳ Low-level driver
 │   ├── input_encoder/     # ✅ Complete
 │   ├── neopixel_led/      # ⏳ Config only
@@ -709,24 +739,31 @@ opentrickler-esp32s3/
 
 ## Conclusion
 
-The ESP32-S3 port has successfully established the **infrastructure layer**:
+The ESP32-S3 port has made significant progress across all layers:
+
+**Infrastructure layer** - ✅ Complete:
 - ✅ Configuration storage (NVS replacing EEPROM)
 - ✅ WiFi and HTTP server
 - ✅ REST API framework
 - ✅ Web UI pages
 
-However, the **hardware integration layer** is largely incomplete:
-- ❌ Motor control (beyond basic STEP pulses)
-- ❌ Scale communication
-- ❌ Display graphics
-- ❌ LED output
+**Hardware integration layer** - ⏳ Mostly working:
+- ✅ Motor STEP generation (MCPWM variable-speed + acceleration ramp)
+- ✅ Motor GPIO control (direction, enable with active-low)
+- ✅ Scale communication (GNG JJB UART 8N1)
+- ✅ Display SPI communication
+- ✅ Encoder input
+- ⚠️ TMC UART RX blocked (see Section 11)
+- ❌ NeoPixel LED output
+- ❌ Display graphics (LVGL)
 
-The **application logic layer** exists as configuration stubs but lacks execution:
-- ⏳ Charge mode has configs but no PID loop
-- ⏳ Profile system stores data but isn't used
-- ❌ Menu system not ported
+**Application logic layer** - ⏳ Core working:
+- ✅ Charge mode state machine runs full dispense cycle
+- ✅ Scale + motor integration in charge mode
+- ⏳ PID control not yet implemented (fixed speeds)
+- ❌ Menu system not ported (needs LVGL)
 
-**Estimated Completion:** 40-50% of original functionality ported. The project is a solid foundation for web-based configuration, but needs significant work on hardware drivers and application logic to become a functional powder dispenser.
+**Estimated Completion:** ~55-60% of original functionality ported. The project can physically dispense powder (motors spin, scale reads weight, charge mode state machine controls the cycle). The main blocker is TMC UART RX for driver configuration, and LVGL for the display UI.
 
 ---
 
@@ -736,5 +773,86 @@ The **application logic layer** exists as configuration stubs but lacks executio
 - WiFi smart root handler correctly shows wizard in AP mode and portal in STA mode
 - All REST endpoints register and parse parameters correctly
 - NVS storage is working reliably for all components
+- Build system: Cannot build from CLI (MSys/Mingw not supported). User builds manually via ESP-IDF Command Prompt.
+- Scale UART was fixed from 7N1 to 8N1 (original Pico code had wrong frame format)
+- CONFIG_VERSION=3 in motors.c forces NVS reset of stale motor configs on update
 
-**Last Updated:** 2026-02-07
+---
+
+## 11. TMC2209 UART Debug Log (Current Blocker)
+
+### Problem Statement
+TMC2209 uses single-wire UART (PDN_UART pin). The ESP32-S3 port needs to TX and RX on the **same GPIO pin** (GPIO16). Currently, UART TX sends successfully, but UART RX receives **0 bytes** - not even the echo of the TX data.
+
+### Pin History
+| Attempt | Pin | Result | Root Cause |
+|---------|-----|--------|------------|
+| 1. Two-pin: TX=GPIO15, RX=GPIO16 | GPIO15+16 | 0 bytes | GPIO15 = 3V3_Out on ESP32-S3-PICO (NOT a GPIO!) |
+| 2. Single-wire: GPIO15 | GPIO15 | 0 bytes | Same: GPIO15 is power pin |
+| 3. Single-wire: GPIO16 | GPIO16 | TX OK, RX 0 bytes | UART signal routing issue |
+
+### Diagnostic Results on GPIO16
+```
+I (1654) TMC_UART: === TMC UART DIAGNOSTIC START (GPIO16) ===
+I (1654) TMC_UART: GPIO16 loopback: write=1 read=1, write=0 read=0 OK    ← Pin works!
+I (1664) TMC_UART: UART1 configured: TX+RX on GPIO16, baud=250000, open-drain
+I (1674) TMC_UART: UART TX test: write_ret=1, wait_tx_done=OK              ← TX works!
+I (1734) TMC_UART: UART RX test: buffered=0, read_ret=0, rx_byte=0x00 NO ECHO  ← RX fails!
+I (1734) TMC_UART: === TMC UART DIAGNOSTIC END ===
+```
+
+### What We Know
+1. **GPIO16 is physically functional** - raw GPIO loopback (write HIGH, read HIGH; write LOW, read LOW) works
+2. **UART1 TX peripheral works** - `uart_write_bytes()` returns 1, `uart_wait_tx_done()` returns OK
+3. **UART1 RX gets nothing** - `uart_get_buffered_data_len()` = 0 after TX completes on same pin
+4. **The pin IS connected to TMC2209** - it's on the physical bus
+
+### Current Implementation Approach
+```c
+// 1. Configure UART with TX only (avoid RX killing TX output)
+uart_set_pin(UART1, GPIO16, UART_PIN_NO_CHANGE, NO_CHANGE, NO_CHANGE);
+
+// 2. Install UART driver
+uart_driver_install(UART1, 256, 256, 0, NULL, 0);
+
+// 3. Manually route pin input to UART1 RX signal
+esp_rom_gpio_connect_in_signal(GPIO16, U1RXD_IN_IDX, false);
+
+// 4. Set open-drain mode (allows TMC to pull bus LOW for response)
+gpio_set_direction(GPIO16, GPIO_MODE_INPUT_OUTPUT_OD);
+gpio_pullup_en(GPIO16);
+```
+
+### Root Cause Analysis
+The likely issue is **`oen_sel` conflict** in the ESP32 GPIO matrix:
+- `uart_set_pin()` for TX calls `esp_rom_gpio_connect_out_signal()` which sets `oen_sel=0` (UART peripheral controls output enable)
+- `gpio_set_direction()` uses `GPIO_ENABLE` register (GPIO controller)
+- When `oen_sel=0`, the GPIO_ENABLE register is **ignored** - the UART peripheral's OEN signal controls whether the pin drives
+- This may prevent the pin from being readable as input even in INPUT_OUTPUT_OD mode
+
+### Approaches NOT Yet Tried
+1. **`uart_set_loop_back(UART1, true)`** - ESP-IDF internal loopback API
+2. **UART2 instead of UART1** - rule out UART1-specific issue
+3. **Force `oen_sel=1`** via direct register write: `GPIO.func_out_sel_cfg[16].oen_sel = 1`
+4. **Push-pull instead of open-drain** - test if issue is OD-specific
+5. **Let `uart_set_pin()` handle both TX and RX**, then fix with `gpio_set_direction(INPUT_OUTPUT)` afterward
+6. **Use `gpio_ll` or `gpio_hal` functions** for lower-level control
+7. **Check UART1 clock gating** - ensure UART1 RX clock is enabled
+
+### Reference: Original Pico Implementation
+```c
+// Original uses separate TX (GP4) and RX (GP5) pins, both connected to TMC PDN_UART
+// RX is toggled on/off via UART hardware register:
+static void _enable_uart_rx(uart_inst_t *uart, bool state) {
+    hw_write_masked(&uart_get_hw(uart)->cr, state ? UART_UARTCR_RXE_BITS : 0, UART_UARTCR_RXE_BITS);
+}
+// Before sending: disable RX. After sending: enable RX, wait for TMC response.
+```
+
+### Files Involved
+- `components/tmc_drivers/tmc_uart_hal_esp32.c` - UART HAL (contains diagnostic code)
+- `components/board_expansion/include/board_pins.h` - Pin definitions
+- `PIN_MAPPING_TABLE.txt` - Hardware pin mapping reference
+- `PICO_W-ESP32_S3_PICO_PIN_MAPPING.md` - Detailed pin-to-pin mapping
+
+**Last Updated:** 2026-02-08

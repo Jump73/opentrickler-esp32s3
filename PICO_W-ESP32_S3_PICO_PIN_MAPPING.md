@@ -8,8 +8,8 @@
 | SCALE_UART_RX          |  2           | GP12                     |
 | COARSE_MOTOR_DIR       |  4           | GP13                     |
 | COARSE_MOTOR_STEP      |  5           | GP14                     |
-| MOTOR_UART_TX          |  6           | GP15                     |
-| MOTOR_UART_RX          |  7           | GP16                     |
+| MOTOR_UART_TX          |  6           | GP16  <!-- Half-duplex: TX/RX on GP16. To revert, restore TX=GP15, RX=GP16 --> |
+| MOTOR_UART_RX          |  7           | GP16  <!-- Half-duplex: TX/RX on GP16. To revert, restore TX=GP15, RX=GP16 --> |
 | COARSE_MOTOR_EN        |  9           | GP17                     |
 | FINE_MOTOR_DIR         | 10           | GP18                     |
 | FINE_MOTOR_STEP        | 11           | GP33                     |

@@ -205,7 +205,11 @@ static esp_err_t tmc2209_driver_init(motor_type_t motor, TMC2209_t *driver, cons
     driver->config.microsteps = config->microsteps;
 
     // Initialize driver communication (UART may not be available - non-fatal)
-    if (!TMC2209_Init(driver)) {
+    bool uart_ok = TMC2209_Init(driver);
+    ESP_LOGI(TAG, "%s TMC2209 UART init: %s",
+        (motor == MOTOR_COARSE) ? "Coarse" : "Fine",
+        uart_ok ? "SUCCESS" : "FAILED");
+    if (!uart_ok) {
         ESP_LOGW(TAG, "%s TMC2209 UART init failed - running without driver config",
                  (motor == MOTOR_COARSE) ? "Coarse" : "Fine");
         return ESP_FAIL;

@@ -13,15 +13,15 @@
 // Motor speeds (can be tuned)
 // These match the original OpenTrickler range - the original uses PID control
 // which would vary speed dynamically; we use fixed speeds with threshold switching
-#define COARSE_SPEED_RPS    1.0f    // ~60 RPM - conservative start (original allows up to 5 rps via PID)
+#define COARSE_SPEED_RPS    0.4f    // ~24 RPM - conservative; increase once TMC UART current works
 #define FINE_SPEED_RPS      0.2f    // ~12 RPM
 
 // Acceleration ramp (rps per task tick = rps/s * TASK_PERIOD_MS/1000)
 // Without ramp, motor jumps from 0 to full speed and stalls (buzzes)
 // PIO original used hardware acceleration profiles; we emulate in software
-#define COARSE_ACCEL_RPS_PER_TICK   0.05f   // ~1 rps/s at 50ms tick
+#define COARSE_ACCEL_RPS_PER_TICK   0.02f   // ~0.4 rps/s at 50ms tick (gentle)
 #define FINE_ACCEL_RPS_PER_TICK     0.02f   // ~0.4 rps/s at 50ms tick
-#define COARSE_START_RPS            0.15f   // Minimum start speed (above static friction)
+#define COARSE_START_RPS            0.3f    // Start above static friction threshold
 #define FINE_START_RPS              0.05f   // Minimum start speed (above static friction)
 
 // Stability detection - number of consecutive stable readings required
