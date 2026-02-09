@@ -20,6 +20,7 @@ static volatile uint8_t s_last_ab = 0;
 static volatile int64_t s_last_btn_us = 0;
 static volatile int64_t s_last_rot_us = 0;
 static volatile bool s_btn_state = false; // pressed?
+static volatile int8_t s_detent_acc = 0;  // accumulate transitions, emit at ±4
 
 static int gpio_read_fast(int pin) {
     return gpio_get_level((gpio_num_t)pin);
@@ -50,14 +51,20 @@ static void IRAM_ATTR isr_rot(void *arg)
     if (d == 0) return;
 
     s_pos += d;
+    s_detent_acc += d;
 
-    enc_msg_t m = {
-        .evt = (d > 0) ? ENC_EVT_CW : ENC_EVT_CCW,
-        .t_us = now
-    };
-    BaseType_t hp = pdFALSE;
-    xQueueSendFromISR(s_q, &m, &hp);
-    if (hp) portYIELD_FROM_ISR();
+    // Quadrature encoders produce 4 transitions per physical detent.
+    // Only emit an event when a full detent (±4) is reached.
+    if (s_detent_acc >= 4 || s_detent_acc <= -4) {
+        enc_msg_t m = {
+            .evt = (s_detent_acc > 0) ? ENC_EVT_CW : ENC_EVT_CCW,
+            .t_us = now
+        };
+        s_detent_acc = 0;
+        BaseType_t hp = pdFALSE;
+        xQueueSendFromISR(s_q, &m, &hp);
+        if (hp) portYIELD_FROM_ISR();
+    }
 }
 
 static void IRAM_ATTR isr_btn(void *arg)

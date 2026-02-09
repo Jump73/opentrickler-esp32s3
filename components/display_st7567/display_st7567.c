@@ -1,156 +1,216 @@
-﻿#include "display_st7567.h"
+#include "display_st7567.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "driver/gpio.h"
-#include "esp_rom_gpio.h"
-#include "rom/ets_sys.h"  // For esp_rom_delay_us
+#include <string.h>
 
 static const char *TAG = "ST7567";
 
-static inline void set_level(int pin, int lvl) {
-    if (pin >= 0) gpio_set_level((gpio_num_t)pin, lvl);
+// DC pin GPIO number for pre-transfer callback
+static int s_dc_gpio = -1;
+
+// Pre-transfer callback: set DC pin from transaction user field
+// user = (void*)0 for command, (void*)1 for data
+static void IRAM_ATTR spi_pre_transfer_cb(spi_transaction_t *t)
+{
+    gpio_set_level((gpio_num_t)s_dc_gpio, (int)t->user);
 }
 
-// Software SPI bit-banging
-static void spi_tx_byte_software(st7567_t *d, uint8_t byte) {
-    for (int bit = 7; bit >= 0; bit--) {
-        // Set MOSI
-        set_level(d->bus.gpio_mosi, (byte >> bit) & 1);
-
-        // Clock pulse: LOW -> HIGH -> LOW
-        set_level(d->bus.gpio_sck, 0);
-        esp_rom_delay_us(1);  // Small delay
-        set_level(d->bus.gpio_sck, 1);
-        esp_rom_delay_us(1);  // Small delay
-        set_level(d->bus.gpio_sck, 0);
-        esp_rom_delay_us(1);  // Small delay
-    }
+static esp_err_t st7567_cmd(st7567_t *d, uint8_t c)
+{
+    spi_transaction_t t = {
+        .length = 8,
+        .tx_buffer = &c,
+        .user = (void *)0,  // DC = 0 (command)
+    };
+    return spi_device_polling_transmit(d->spi_dev, &t);
 }
 
-static esp_err_t spi_tx(st7567_t *d, const uint8_t *buf, size_t len) {
-    for (size_t i = 0; i < len; i++) {
-        spi_tx_byte_software(d, buf[i]);
-    }
-    return ESP_OK;
-}
-
-static esp_err_t cmd(st7567_t *d, uint8_t c) {
-    set_level(d->bus.gpio_a0, 0);
-    set_level(d->bus.gpio_cs, 0);
-    esp_err_t r = spi_tx(d, &c, 1);
-    set_level(d->bus.gpio_cs, 1);
-    return r;
-}
-
-static esp_err_t data(st7567_t *d, const uint8_t *buf, size_t len) {
-    set_level(d->bus.gpio_a0, 1);
-    set_level(d->bus.gpio_cs, 0);
-    esp_err_t r = spi_tx(d, buf, len);
-    set_level(d->bus.gpio_cs, 1);
-    return r;
+static esp_err_t st7567_data(st7567_t *d, const uint8_t *buf, size_t len)
+{
+    if (len == 0) return ESP_OK;
+    spi_transaction_t t = {
+        .length = len * 8,
+        .tx_buffer = buf,
+        .user = (void *)1,  // DC = 1 (data)
+    };
+    return spi_device_polling_transmit(d->spi_dev, &t);
 }
 
 esp_err_t st7567_init(st7567_t *d, const st7567_bus_t *bus)
 {
     if (!d || !bus) return ESP_ERR_INVALID_ARG;
     d->bus = *bus;
+    s_dc_gpio = bus->gpio_a0;
 
     ESP_LOGI(TAG, "init: host=%d sck=%d mosi=%d cs=%d a0=%d rst=%d clk=%d",
-             (int)bus->host, bus->gpio_sck, bus->gpio_mosi, bus->gpio_cs, bus->gpio_a0, bus->gpio_rst, bus->clk_hz);
+             (int)bus->host, bus->gpio_sck, bus->gpio_mosi,
+             bus->gpio_cs, bus->gpio_a0, bus->gpio_rst, bus->clk_hz);
 
-    // Configure all GPIO pins as outputs
-    gpio_config_t io = {0};
-    io.mode = GPIO_MODE_OUTPUT;
-    io.pull_down_en = 0;
-    io.pull_up_en = 0;
-    io.intr_type = GPIO_INTR_DISABLE;
-
-    // Configure CS, A0, SCK, MOSI
-    io.pin_bit_mask = (1ULL<<bus->gpio_cs) | (1ULL<<bus->gpio_a0) |
-                      (1ULL<<bus->gpio_sck) | (1ULL<<bus->gpio_mosi);
+    // Configure DC (A0) pin as GPIO output
+    gpio_config_t io = {
+        .pin_bit_mask = (1ULL << bus->gpio_a0),
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
     ESP_ERROR_CHECK(gpio_config(&io));
+    gpio_set_level((gpio_num_t)bus->gpio_a0, 0);
 
-    // SPECIAL: Set maximum drive strength for GPIO42 (SCK) if used
-    if (bus->gpio_sck == 42 || bus->gpio_sck == 41 || bus->gpio_sck == 2) {
-        ESP_LOGI(TAG, "Setting MAXIMUM drive strength for GPIO%d", bus->gpio_sck);
-        gpio_set_drive_capability((gpio_num_t)bus->gpio_sck, GPIO_DRIVE_CAP_3);
-    }
-    if (bus->gpio_mosi == 42 || bus->gpio_mosi == 41 || bus->gpio_mosi == 2) {
-        ESP_LOGI(TAG, "Setting MAXIMUM drive strength for GPIO%d", bus->gpio_mosi);
-        gpio_set_drive_capability((gpio_num_t)bus->gpio_mosi, GPIO_DRIVE_CAP_3);
-    }
-    if (bus->gpio_cs == 42 || bus->gpio_cs == 41) {
-        ESP_LOGI(TAG, "Setting MAXIMUM drive strength for GPIO%d", bus->gpio_cs);
-        gpio_set_drive_capability((gpio_num_t)bus->gpio_cs, GPIO_DRIVE_CAP_3);
-    }
-    if (bus->gpio_a0 >= 0) {
-        gpio_set_drive_capability((gpio_num_t)bus->gpio_a0, GPIO_DRIVE_CAP_3);
-    }
-
-    // Set initial levels
-    set_level(bus->gpio_cs, 1);     // CS idle HIGH
-    set_level(bus->gpio_a0, 0);     // A0/DC default to command mode
-    set_level(bus->gpio_sck, 0);    // SCK idle LOW
-    set_level(bus->gpio_mosi, 0);   // MOSI idle LOW
-
-    ESP_LOGI(TAG, "SOFTWARE SPI mode - GPIO configured with MAX drive strength");
-
-    // Reset sequence
+    // Configure RST pin if used
     if (bus->gpio_rst >= 0) {
-        io.pin_bit_mask = (1ULL<<bus->gpio_rst);
+        io.pin_bit_mask = (1ULL << bus->gpio_rst);
         ESP_ERROR_CHECK(gpio_config(&io));
-        set_level(bus->gpio_rst, 1);
-        vTaskDelay(pdMS_TO_TICKS(10));
-        set_level(bus->gpio_rst, 0);
-        vTaskDelay(pdMS_TO_TICKS(20));
-        set_level(bus->gpio_rst, 1);
-        vTaskDelay(pdMS_TO_TICKS(100));  // Longer delay after reset
-        ESP_LOGI(TAG, "rst pulse done (software SPI)");
-    } else {
-        ESP_LOGI(TAG, "rst disabled");
     }
 
-    ESP_ERROR_CHECK(cmd(d, 0xAE));   // Display OFF
-    ESP_ERROR_CHECK(cmd(d, 0xA2));   // Bias 1/9
-    ESP_ERROR_CHECK(cmd(d, 0xA0));   // ADC normal
-    ESP_ERROR_CHECK(cmd(d, 0xC8));   // COM reverse
-    ESP_ERROR_CHECK(cmd(d, 0x22));   // Regulation ratio
-    ESP_ERROR_CHECK(cmd(d, 0x81));   // Set contrast (2-byte command)
-    ESP_ERROR_CHECK(cmd(d, 0x3F));   // Contrast value MAX (0x3F = 63)
-    ESP_ERROR_CHECK(cmd(d, 0x2F));   // Power control ON
-    ESP_ERROR_CHECK(cmd(d, 0x40));   // Start line 0
-    ESP_ERROR_CHECK(cmd(d, 0xAF));   // Display ON
+    // Initialize SPI bus
+    spi_bus_config_t buscfg = {
+        .mosi_io_num = bus->gpio_mosi,
+        .miso_io_num = -1,
+        .sclk_io_num = bus->gpio_sck,
+        .quadwp_io_num = -1,
+        .quadhd_io_num = -1,
+        .max_transfer_sz = ST7567_FB_SIZE,
+    };
+    esp_err_t ret = spi_bus_initialize(bus->host, &buscfg, SPI_DMA_CH_AUTO);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "SPI bus init failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
 
-    ESP_LOGI(TAG, "init done");
+    // Add ST7567 as SPI device
+    spi_device_interface_config_t devcfg = {
+        .clock_speed_hz = bus->clk_hz,
+        .mode = 0,                    // SPI Mode 0 (CPOL=0, CPHA=0)
+        .spics_io_num = bus->gpio_cs,
+        .queue_size = 4,
+        .pre_cb = spi_pre_transfer_cb,
+    };
+    ret = spi_bus_add_device(bus->host, &devcfg, &d->spi_dev);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "SPI device add failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    ESP_LOGI(TAG, "Hardware SPI configured on host %d at %d Hz", (int)bus->host, bus->clk_hz);
+
+    // Hardware reset sequence
+    if (bus->gpio_rst >= 0) {
+        gpio_set_level((gpio_num_t)bus->gpio_rst, 1);
+        vTaskDelay(pdMS_TO_TICKS(10));
+        gpio_set_level((gpio_num_t)bus->gpio_rst, 0);
+        vTaskDelay(pdMS_TO_TICKS(20));
+        gpio_set_level((gpio_num_t)bus->gpio_rst, 1);
+        vTaskDelay(pdMS_TO_TICKS(100));
+        ESP_LOGI(TAG, "reset pulse done");
+    }
+
+    // UC1701 mini12864 initialization sequence (exact match of u8g2 u8x8_d_uc1701_mini12864.c)
+    ESP_ERROR_CHECK(st7567_cmd(d, 0xE2));  // System Reset
+    vTaskDelay(pdMS_TO_TICKS(5));          // Wait after soft reset
+    ESP_ERROR_CHECK(st7567_cmd(d, 0x40));  // Set scroll line to 0
+    ESP_ERROR_CHECK(st7567_cmd(d, 0xA0));  // ADC set to normal
+    ESP_ERROR_CHECK(st7567_cmd(d, 0xC8));  // COM Output Scan Direction: Reverse
+    ESP_ERROR_CHECK(st7567_cmd(d, 0xA2));  // LCD Bias = 1/9
+    // Staged power-up (per u8g2 and UC1701 datasheet)
+    ESP_ERROR_CHECK(st7567_cmd(d, 0x2C));  // Booster Circuits ON
+    vTaskDelay(pdMS_TO_TICKS(50));
+    ESP_ERROR_CHECK(st7567_cmd(d, 0x2E));  // Booster + Voltage Regulator ON
+    vTaskDelay(pdMS_TO_TICKS(50));
+    ESP_ERROR_CHECK(st7567_cmd(d, 0x2F));  // Booster + Vreg + V-follower ON
+    ESP_ERROR_CHECK(st7567_cmd(d, 0xF8));  // Set booster ratio (2-byte command)
+    ESP_ERROR_CHECK(st7567_cmd(d, 0x00));  // Booster ratio = 4x
+    ESP_ERROR_CHECK(st7567_cmd(d, 0x27));  // V0 voltage resistor ratio = 7
+    ESP_ERROR_CHECK(st7567_cmd(d, 0x81));  // Set electronic volume (2-byte command)
+    ESP_ERROR_CHECK(st7567_cmd(d, 0x10));  // Electronic volume value = 16
+    ESP_ERROR_CHECK(st7567_cmd(d, 0xAC));  // Static indicator OFF (2-byte command)
+    ESP_ERROR_CHECK(st7567_cmd(d, 0x00));  // Static indicator register = 0
+    ESP_ERROR_CHECK(st7567_cmd(d, 0xA6));  // Normal display (bit inversion done in LVGL flush)
+    // Init ends with display OFF in power-save mode (matches u8g2 behavior)
+    ESP_ERROR_CHECK(st7567_cmd(d, 0xAE));  // Display OFF
+    ESP_ERROR_CHECK(st7567_cmd(d, 0xA5));  // All pixels ON (power save)
+
+    ESP_LOGI(TAG, "init done (hardware SPI, UC1701 mini12864 sequence)");
     return ESP_OK;
 }
 
 esp_err_t st7567_set_page_col(st7567_t *d, uint8_t page, uint8_t col)
 {
     if (!d) return ESP_ERR_INVALID_ARG;
-    ESP_ERROR_CHECK(cmd(d, 0xB0 | (page & 0x0F)));
-    ESP_ERROR_CHECK(cmd(d, 0x10 | ((col >> 4) & 0x0F)));
-    ESP_ERROR_CHECK(cmd(d, 0x00 | (col & 0x0F)));
+    ESP_ERROR_CHECK(st7567_cmd(d, 0xB0 | (page & 0x0F)));
+    ESP_ERROR_CHECK(st7567_cmd(d, 0x10 | ((col >> 4) & 0x0F)));
+    ESP_ERROR_CHECK(st7567_cmd(d, 0x00 | (col & 0x0F)));
     return ESP_OK;
 }
 
 esp_err_t st7567_write(st7567_t *d, const uint8_t *buf, size_t len)
 {
     if (!d || !buf || !len) return ESP_ERR_INVALID_ARG;
-    return data(d, buf, len);
+    return st7567_data(d, buf, len);
+}
+
+esp_err_t st7567_write_framebuffer(st7567_t *d, const uint8_t *fb)
+{
+    if (!d || !fb) return ESP_ERR_INVALID_ARG;
+
+    // Half-swap for UC1701 dual-scan LCD panel:
+    // display columns 0-63 = physical RIGHT, columns 64-127 = physical LEFT
+    for (int page = 0; page < ST7567_PAGES; page++) {
+        // Buffer left half (cols 0-63) → display cols 64-127 (physical LEFT)
+        ESP_ERROR_CHECK(st7567_set_page_col(d, (uint8_t)page, 64));
+        ESP_ERROR_CHECK(st7567_data(d, &fb[page * ST7567_WIDTH], 64));
+        // Buffer right half (cols 64-127) → display cols 0-63 (physical RIGHT)
+        ESP_ERROR_CHECK(st7567_set_page_col(d, (uint8_t)page, 0));
+        ESP_ERROR_CHECK(st7567_data(d, &fb[page * ST7567_WIDTH + 64], 64));
+    }
+    return ESP_OK;
+}
+
+esp_err_t st7567_power_save(st7567_t *d, bool on)
+{
+    if (!d) return ESP_ERR_INVALID_ARG;
+    if (on) {
+        // Enter power save: display OFF, all pixels ON
+        ESP_ERROR_CHECK(st7567_cmd(d, 0xAE));  // Display OFF
+        ESP_ERROR_CHECK(st7567_cmd(d, 0xA5));  // All pixels ON (power save)
+    } else {
+        // Exit power save: all pixels OFF, display ON
+        ESP_ERROR_CHECK(st7567_cmd(d, 0xA4));  // All pixels OFF (normal)
+        ESP_ERROR_CHECK(st7567_cmd(d, 0xAF));  // Display ON
+    }
+    ESP_LOGI(TAG, "power save %s", on ? "ON" : "OFF");
+    return ESP_OK;
+}
+
+esp_err_t st7567_set_contrast(st7567_t *d, uint8_t contrast)
+{
+    if (!d) return ESP_ERR_INVALID_ARG;
+    if (contrast > 63) contrast = 63;
+    ESP_ERROR_CHECK(st7567_cmd(d, 0x81));
+    ESP_ERROR_CHECK(st7567_cmd(d, contrast));
+    return ESP_OK;
 }
 
 esp_err_t st7567_fill_test_pattern(st7567_t *d)
 {
     if (!d) return ESP_ERR_INVALID_ARG;
-    uint8_t line[128];
-    for (int i=0;i<128;i++) line[i] = (i & 1) ? 0xAA : 0x55;
-
-    for (int p=0;p<8;p++) {
-        ESP_ERROR_CHECK(st7567_set_page_col(d, (uint8_t)p, 0));
-        ESP_ERROR_CHECK(st7567_write(d, line, sizeof(line)));
+    uint8_t line[ST7567_WIDTH];
+    // Left half: all pixels ON (bright), right half: all pixels OFF (dark)
+    // This makes polarity visually obvious
+    for (int i = 0; i < ST7567_WIDTH; i++) {
+        line[i] = (i < 64) ? 0xFF : 0x00;
     }
-    ESP_LOGI(TAG, "pattern sent");
+    // Half-swap for UC1701 dual-scan LCD panel
+    for (int p = 0; p < ST7567_PAGES; p++) {
+        // Left half (cols 0-63) → display cols 64-127 (physical LEFT)
+        ESP_ERROR_CHECK(st7567_set_page_col(d, (uint8_t)p, 64));
+        ESP_ERROR_CHECK(st7567_write(d, &line[0], 64));
+        // Right half (cols 64-127) → display cols 0-63 (physical RIGHT)
+        ESP_ERROR_CHECK(st7567_set_page_col(d, (uint8_t)p, 0));
+        ESP_ERROR_CHECK(st7567_write(d, &line[64], 64));
+    }
+    ESP_LOGI(TAG, "test pattern: left=bright, right=dark");
     return ESP_OK;
 }

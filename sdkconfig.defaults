@@ -1,0 +1,30 @@
+# Partition table - use large single app (1.9MB) to fit LVGL
+CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
+CONFIG_PARTITION_TABLE_SINGLE_APP=n
+
+# Task watchdog - don't monitor IDLE1 (LVGL task runs on core 1)
+CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU1=n
+
+# LVGL configuration for monochrome ST7567 128x64 display
+# Note: LVGL v9 renders internally at LV_COLOR_DEPTH (16-bit default),
+# then converts to display format (I1) via layer_reshape_draw_buf.
+CONFIG_LV_DPI_DEF=40
+
+# LVGL logging (enable during development)
+CONFIG_LV_USE_LOG=y
+CONFIG_LV_LOG_LEVEL_WARN=y
+
+# LVGL fonts - enable small built-in fonts for monochrome
+CONFIG_LV_FONT_MONTSERRAT_8=y
+CONFIG_LV_FONT_MONTSERRAT_10=y
+CONFIG_LV_FONT_MONTSERRAT_12=y
+CONFIG_LV_FONT_MONTSERRAT_14=y
+CONFIG_LV_FONT_UNSCII_8=y
+CONFIG_LV_FONT_UNSCII_16=y
+CONFIG_LV_FONT_DEFAULT_MONTSERRAT_12=y
+
+# Disable unused LVGL features to save Flash/RAM
+CONFIG_LV_USE_SYSMON=n
+CONFIG_LV_USE_PROFILER=n
+CONFIG_LV_USE_PERF_MONITOR=n
+CONFIG_LV_USE_MEM_MONITOR=n

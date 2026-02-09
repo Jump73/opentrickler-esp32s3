@@ -61,15 +61,20 @@ typedef struct {
     bool pwm_out_led_is_rgbw;  // true: RGBW, false: RGB
 } neopixel_led_config_t;
 
-// Initialize neopixel LED module
-esp_err_t neopixel_led_init(void);
+// Number of NeoPixel LEDs on the MINI12864 V2.0 (3 backlight + 1 encoder knob)
+#define NEOPIXEL_BACKLIGHT_COUNT 4
+
+// Initialize neopixel LED hardware on specified GPIO pin.
+// Must be called AFTER LCD reset completes if sharing the same GPIO (time-multiplexed pin).
+// Backlight LEDs are set to the saved NVS color immediately.
+esp_err_t neopixel_led_init(int gpio_num);
 
 // Configuration management (NVS)
 esp_err_t neopixel_led_save_config(const neopixel_led_config_t *config);
 esp_err_t neopixel_led_load_config(neopixel_led_config_t *config);
 esp_err_t neopixel_led_get_config(neopixel_led_config_t *config);
 
-// LED control (stub for now - will use led_strip library later)
+// Set LED colors and refresh the LED strip
 esp_err_t neopixel_led_set_colour(uint32_t mini12864_backlight, uint32_t led1, uint32_t led2);
 
 #ifdef __cplusplus

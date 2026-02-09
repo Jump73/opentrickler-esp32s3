@@ -15,12 +15,34 @@
 #include "neopixel_led.h"
 #include "system_control.h"
 
+// Display and LVGL
+#include "ot_pins.h"
+#include "display_st7567.h"
+#include "lvgl_port.h"
+#include "ui_screens.h"
+
 // Include generated HTML headers
 #include "generated/web_portal.html.h"
 #include "generated/wizard.html.h"
 #include "generated/display_mirror.html.h"
 
 static const char *TAG = "WebTest";
+
+// ST7567 display instance
+static st7567_t s_lcd;
+
+// UI update task - periodically refreshes active screen data
+static void ui_update_task(void *arg)
+{
+    ESP_LOGI(TAG, "UI update task started");
+    while (1) {
+        if (lvgl_port_lock(100)) {
+            ui_screens_update();
+            lvgl_port_unlock();
+        }
+        vTaskDelay(pdMS_TO_TICKS(10));  // 100 Hz update rate
+    }
+}
 
 // Example REST handler - returns JSON (without HTTP headers)
 static char* rest_test_handler(int num_params, char *params[], char *values[])
@@ -103,21 +125,77 @@ void app_main(void)
         return;
     }
 
-    ESP_LOGI(TAG, "Step 7: Initializing NeoPixel LED...");
-    ret = neopixel_led_init();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "NeoPixel LED init failed: %s", esp_err_to_name(ret));
-        return;
-    }
-
-    ESP_LOGI(TAG, "Step 8: Initializing system control...");
+    ESP_LOGI(TAG, "Step 7: Initializing system control...");
     ret = system_control_init();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "System control init failed: %s", esp_err_to_name(ret));
         return;
     }
 
-    ESP_LOGI(TAG, "Step 9: Auto-starting WiFi (STA or AP)...");
+    // Initialize display, NeoPixel backlight, and LVGL
+    ESP_LOGI(TAG, "Step 8: Initializing display (UC1701 via SPI)...");
+    {
+        st7567_bus_t bus = {
+            .host = SPI3_HOST,
+            .gpio_sck = LCD_SCK,     // GPIO1
+            .gpio_mosi = LCD_MOSI,   // GPIO2
+            .gpio_cs = LCD_CS,       // GPIO41
+            .gpio_a0 = LCD_A0,       // GPIO4
+            .gpio_rst = LCD_RST,     // GPIO5
+            .clk_hz = 4000000,       // 4 MHz
+        };
+        ret = st7567_init(&s_lcd, &bus);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "ST7567 init failed: %s", esp_err_to_name(ret));
+            // Continue without display
+        }
+    }
+
+    if (ret == ESP_OK) {
+        // Wake display from power-save (init ends with display OFF per u8g2 convention)
+        st7567_power_save(&s_lcd, false);
+
+        // Diagnostic: send test pattern to verify SPI communication
+        ESP_LOGI(TAG, "  Sending test pattern to verify SPI...");
+        st7567_fill_test_pattern(&s_lcd);
+        vTaskDelay(pdMS_TO_TICKS(2000));  // Show test pattern for 2 seconds
+    }
+
+    // Step 9: NeoPixel backlight (GPIO38, separate from LCD_RST=GPIO5)
+    ESP_LOGI(TAG, "Step 9: Initializing NeoPixel backlight on GPIO%d...", NEOPIXEL);
+    ret = neopixel_led_init(NEOPIXEL);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "NeoPixel init failed: %s (backlight will be off)", esp_err_to_name(ret));
+        // Don't return - display can work without backlight
+    }
+
+    // Step 10: LVGL port + UI
+    ESP_LOGI(TAG, "Step 10: Initializing LVGL...");
+    {
+        encoder_cfg_t enc_cfg = {
+            .gpio_a = BTN_EN1,    // GPIO40
+            .gpio_b = BTN_EN2,    // GPIO39
+            .gpio_btn = ENC_BTN,  // GPIO6
+            .pullups = true,
+            .position = 0,
+        };
+        lvgl_port_cfg_t lvgl_cfg = {
+            .lcd = &s_lcd,
+            .enc = &enc_cfg,
+        };
+        ret = lvgl_port_init(&lvgl_cfg);
+        if (ret == ESP_OK) {
+            if (lvgl_port_lock(1000)) {
+                ui_screens_init();
+                lvgl_port_unlock();
+            }
+            ESP_LOGI(TAG, "Display + LVGL initialized OK");
+        } else {
+            ESP_LOGE(TAG, "LVGL port init failed: %s", esp_err_to_name(ret));
+        }
+    }
+
+    ESP_LOGI(TAG, "Step 11: Auto-starting WiFi (STA or AP)...");
     ret = wifi_manager_auto_start("OpenTrickler-ESP32", "opentrickler");
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "WiFi start failed: %s", esp_err_to_name(ret));
@@ -125,11 +203,11 @@ void app_main(void)
     }
 
     // Wait a bit for WiFi to stabilize
-    ESP_LOGI(TAG, "Step 10: Waiting for WiFi to stabilize...");
+    ESP_LOGI(TAG, "Step 12: Waiting for WiFi to stabilize...");
     vTaskDelay(pdMS_TO_TICKS(2000));
 
     // Initialize HTTP server
-    ESP_LOGI(TAG, "Step 11: Starting HTTP server...");
+    ESP_LOGI(TAG, "Step 13: Starting HTTP server...");
     ret = http_server_init();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "HTTP server init failed: %s", esp_err_to_name(ret));
@@ -137,7 +215,7 @@ void app_main(void)
     }
 
     // Register HTML pages
-    ESP_LOGI(TAG, "Step 12: Registering web pages...");
+    ESP_LOGI(TAG, "Step 14: Registering web pages...");
     // Smart root handler - shows wizard in AP mode, portal in STA mode
     http_server_register_rest_handler("/", root_page_handler);
     http_server_register_page_handler("/wizard", html_wizard_html);
@@ -146,7 +224,7 @@ void app_main(void)
     http_server_register_page_handler("/display_mirror", html_display_mirror_html);
 
     // Register REST endpoints
-    ESP_LOGI(TAG, "Step 13: Registering REST endpoints...");
+    ESP_LOGI(TAG, "Step 15: Registering REST endpoints...");
     http_server_register_rest_handler("/rest/test", rest_test_handler);
     http_server_register_rest_handler("/rest/wireless_config", rest_wireless_config_handler);
     http_server_register_rest_handler("/rest/system_control", rest_system_control_handler);
@@ -163,25 +241,23 @@ void app_main(void)
 
     ESP_LOGI(TAG, "");
     ESP_LOGI(TAG, "============================================");
-    ESP_LOGI(TAG, "Web UI ready in AP MODE!");
+    ESP_LOGI(TAG, "OpenTrickler ESP32-S3 ready!");
     ESP_LOGI(TAG, "");
     ESP_LOGI(TAG, "Connect to WiFi:");
     ESP_LOGI(TAG, "  SSID: OpenTrickler-ESP32");
     ESP_LOGI(TAG, "  Password: opentrickler");
     ESP_LOGI(TAG, "");
-    ESP_LOGI(TAG, "Then open browser and go to:");
-    ESP_LOGI(TAG, "  http://%s/        <- Smart: Wizard (AP) or Portal (STA)", wifi_manager_get_ip());
-    ESP_LOGI(TAG, "  http://%s/wizard  <- Setup Wizard (works offline)", wifi_manager_get_ip());
-    ESP_LOGI(TAG, "  http://%s/portal  <- Full Web Portal (needs internet for CSS)", wifi_manager_get_ip());
-    ESP_LOGI(TAG, "");
-    ESP_LOGI(TAG, "REST API test:");
-    ESP_LOGI(TAG, "  http://%s/rest/test", wifi_manager_get_ip());
+    ESP_LOGI(TAG, "Then open browser:");
+    ESP_LOGI(TAG, "  http://%s/", wifi_manager_get_ip());
     ESP_LOGI(TAG, "============================================");
     ESP_LOGI(TAG, "");
+
+    // Start UI update task (periodically refreshes charge mode display)
+    xTaskCreate(ui_update_task, "ui_upd", 4096, NULL, 3, NULL);
 
     // Main loop - keep running
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(10000));
-        ESP_LOGI(TAG, "WiFi AP running, connected: %d", wifi_manager_is_connected());
+        ESP_LOGI(TAG, "System running, WiFi connected: %d", wifi_manager_is_connected());
     }
 }
