@@ -912,6 +912,7 @@
     });
 
     var pollSetTimeoutId;
+    var lastShownEvent = 0;
 
     // Set Charge Mode Set Point with REST interface
     function setChargeWeight() {
@@ -1122,13 +1123,15 @@
                 _setStartStopButtonWidget(true);
             }
 
-            // Process event
-            if (charge_mode_event != ChargeModeEvent.NO_EVENT) {
+            // Process event - only show dialog once per new event
+            var hasEvent = (charge_mode_event & (ChargeModeEvent.UNDER_CHARGE | ChargeModeEvent.OVER_CHARGE)) != 0;
+            if (hasEvent && charge_mode_event != lastShownEvent) {
+                lastShownEvent = charge_mode_event;
                 var dialog_name = null;
-                if (charge_mode_event == ChargeModeEvent.UNDER_CHARGE) {
+                if (charge_mode_event & ChargeModeEvent.UNDER_CHARGE) {
                     dialog_name = "underThrowDialog";
                 }
-                else if (charge_mode_event == ChargeModeEvent.OVER_CHARGE) {
+                else if (charge_mode_event & ChargeModeEvent.OVER_CHARGE) {
                     dialog_name = "overThrowDialog";
                 }
 
@@ -1137,6 +1140,9 @@
                 if (dialogModal) {
                     dialogModal.showModal();
                 }
+            }
+            else if (!hasEvent) {
+                lastShownEvent = 0;
             }
         })
         .catch(error => {

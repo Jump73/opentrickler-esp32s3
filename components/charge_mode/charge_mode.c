@@ -142,6 +142,9 @@ static void do_wait_for_zero(void)
 {
     ESP_LOGI(TAG, "State: WAIT_FOR_ZERO (target=%.3f)", runtime_state.target_charge_weight);
 
+    // Clear events from previous cycle
+    runtime_state.charge_mode_event = 0;
+
     ring_buf_t data_buffer;
     ring_buf_init(&data_buffer, 10);
 
