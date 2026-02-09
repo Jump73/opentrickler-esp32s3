@@ -164,10 +164,28 @@ static void scale_line_feed(void)
     }
     line_buf[line_buf_idx] = '\0';
 
-    // Scan every position for a valid float (handles G&G "+ 1.234" format
-    // where sign and number are separated by spaces)
+    // Scan for a valid float, handling sign separated from digits by spaces
+    // (e.g. AND FXi: "ST,-    1.23 GN", G&G: "-  1.234 GN")
     char *endptr;
     for (char *p = line_buf; *p; p++) {
+        // Handle sign character separated from digits by spaces
+        if (*p == '+' || *p == '-') {
+            float sign = (*p == '-') ? -1.0f : 1.0f;
+            char *q = p + 1;
+            while (*q == ' ') q++;  // skip spaces between sign and digits
+            if (*q && ((*q >= '0' && *q <= '9') || *q == '.')) {
+                float w = strtof(q, &endptr);
+                if (endptr != q) {
+                    w *= sign;
+                    ESP_LOGD(TAG, "Parsed weight: %.4f from '%s'", w, line_buf);
+                    update_measurement(w);
+                    line_buf_idx = 0;
+                    return;
+                }
+            }
+        }
+
+        // Standard parse (handles numbers without separated signs)
         float w = strtof(p, &endptr);
         if (endptr != p) {
             ESP_LOGD(TAG, "Parsed weight: %.4f from '%s'", w, line_buf);

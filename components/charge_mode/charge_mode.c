@@ -1,6 +1,15 @@
+/*
+ * charge_mode.c - Powder charge mode with PID control for OpenTrickler ESP32-S3
+ *
+ * Ported from original OpenTrickler-RP2040-Controller charge_mode.cpp.
+ * Uses profile-based PID control for both coarse and fine motors,
+ * blocking scale measurements, and statistical stability detection.
+ */
+
 #include "charge_mode.h"
 #include "motors.h"
 #include "scale.h"
+#include "profile.h"
 #include "esp_log.h"
 #include "nvs_flash.h"
 #include "nvs.h"
@@ -10,66 +19,85 @@
 #include <stdlib.h>
 #include <math.h>
 
-// Motor speeds (can be tuned)
-// These match the original OpenTrickler range - the original uses PID control
-// which would vary speed dynamically; we use fixed speeds with threshold switching
-#define COARSE_SPEED_RPS    0.4f    // ~24 RPM - conservative; increase once TMC UART current works
-#define FINE_SPEED_RPS      0.2f    // ~12 RPM
-
-// Acceleration ramp (rps per task tick = rps/s * TASK_PERIOD_MS/1000)
-// Without ramp, motor jumps from 0 to full speed and stalls (buzzes)
-// PIO original used hardware acceleration profiles; we emulate in software
-#define COARSE_ACCEL_RPS_PER_TICK   0.02f   // ~0.4 rps/s at 50ms tick (gentle)
-#define FINE_ACCEL_RPS_PER_TICK     0.02f   // ~0.4 rps/s at 50ms tick
-#define COARSE_START_RPS            0.3f    // Start above static friction threshold
-#define FINE_START_RPS              0.05f   // Minimum start speed (above static friction)
-
-// Stability detection - number of consecutive stable readings required
-#define ZERO_STABLE_COUNT       20  // 1s @ 50ms tick - stable zero before dispensing
-#define SETTLE_STABLE_COUNT     10  // 500ms - scale settled after dispensing
-#define CUP_REMOVE_COUNT         3  // 150ms - quick cup removal detection
-#define CUP_RETURN_STABLE_COUNT 10  // 500ms - cup returned and stable
-
-// Tolerance for stable reading detection
-// G&G JJB resolution: 0.001g (1mg) = 0.02gn
-#define ZERO_TOLERANCE_G    0.005f  // ±0.005g (±5mg ≈ ±0.08gn) for zero detection
-#define STABLE_TOLERANCE_G  0.002f  // ±0.002g (±2mg) reading-to-reading stability
-#define CUP_REMOVED_G      -0.3f   // Below this = cup removed (negative from tare)
-#define CUP_RETURNED_MAX_G  1.0f   // Below this and near zero = empty cup returned
-
-// Task parameters
-#define TASK_PERIOD_MS      50
-#define TASK_STACK          4096
-#define TASK_PRIORITY       8
-
 static const char *TAG = "ChargeMode";
 
 #define NVS_NAMESPACE "charge_mode"
 #define NVS_KEY_CONFIG "config"
 #define CONFIG_VERSION 1
 
-// Default configuration
+// Task parameters
+#define TASK_STACK          4096
+#define TASK_PRIORITY       8
+
+/* ══════════════════════ Float Ring Buffer ══════════════════════ */
+
+#define RING_BUF_MAX 16
+
+typedef struct {
+    float data[RING_BUF_MAX];
+    int head;
+    int count;
+    int capacity;
+} ring_buf_t;
+
+static void ring_buf_init(ring_buf_t *rb, int capacity)
+{
+    rb->head = 0;
+    rb->count = 0;
+    rb->capacity = (capacity > RING_BUF_MAX) ? RING_BUF_MAX : capacity;
+}
+
+static void ring_buf_push(ring_buf_t *rb, float value)
+{
+    rb->data[rb->head] = value;
+    rb->head = (rb->head + 1) % rb->capacity;
+    if (rb->count < rb->capacity) {
+        rb->count++;
+    }
+}
+
+static float ring_buf_mean(const ring_buf_t *rb)
+{
+    if (rb->count == 0) return 0.0f;
+    float sum = 0.0f;
+    for (int i = 0; i < rb->count; i++) {
+        sum += rb->data[i];
+    }
+    return sum / (float)rb->count;
+}
+
+static float ring_buf_sd(const ring_buf_t *rb)
+{
+    if (rb->count < 2) return 999.0f;
+    float mean = ring_buf_mean(rb);
+    float sum_sq = 0.0f;
+    for (int i = 0; i < rb->count; i++) {
+        float diff = rb->data[i] - mean;
+        sum_sq += diff * diff;
+    }
+    return sqrtf(sum_sq / (float)rb->count);
+}
+
+/* ══════════════════════ Configuration ══════════════════════ */
+
+// Default configuration (matching original)
 static charge_mode_config_t charge_mode_config = {
     .config_version = CONFIG_VERSION,
 
-    // LED colors (default from original)
     .neopixel_normal_charge_colour = RGB_COLOUR_GREEN,
     .neopixel_under_charge_colour = RGB_COLOUR_YELLOW,
     .neopixel_over_charge_colour = RGB_COLOUR_RED,
     .neopixel_not_ready_colour = RGB_COLOUR_BLUE,
 
-    // Thresholds (default from original)
-    .coarse_stop_threshold = 0.5f,
-    .fine_stop_threshold = 0.05f,
-    .set_point_sd_margin = 0.01f,
-    .set_point_mean_margin = 0.01f,
+    .coarse_stop_threshold = 5.0f,      // Original default: 5 grains
+    .fine_stop_threshold = 0.03f,        // Original default: 0.03 grains
+    .set_point_sd_margin = 0.02f,
+    .set_point_mean_margin = 0.02f,
 
-    // Display settings
-    .decimal_places = DP_3,
+    .decimal_places = DP_2,
 
-    // Precharge settings (default from original)
     .precharge_enable = false,
-    .precharge_time_ms = 200,
+    .precharge_time_ms = 1000,
     .precharge_speed_rps = 2.0f
 };
 
@@ -83,6 +111,14 @@ static charge_mode_state_t_runtime runtime_state = {
     .elapsed_time_seconds = 0.0f
 };
 
+/* ══════════════════════ Charge Mode Event Bits ══════════════════════ */
+
+#define CHARGE_MODE_EVENT_NO_EVENT      (1 << 0)
+#define CHARGE_MODE_EVENT_UNDER_CHARGE  (1 << 1)
+#define CHARGE_MODE_EVENT_OVER_CHARGE   (1 << 2)
+
+/* ══════════════════════ Helper ══════════════════════ */
+
 static void stop_all_motors(void)
 {
     motor_set_speed(MOTOR_COARSE, 0.0f);
@@ -91,169 +127,332 @@ static void stop_all_motors(void)
     motor_enable(MOTOR_FINE, false);
 }
 
+/* Check if REST API changed state to EXIT (abort requested) */
+static inline bool exit_requested(void)
+{
+    return runtime_state.charge_mode_state == CHARGE_MODE_EXIT;
+}
+
+/* ══════════════════════ Wait for Zero ══════════════════════ */
+/*
+ * Original: FloatRingBuffer(10), check SD < sd_margin && abs(mean) < mean_margin
+ * Waits for 10 stable readings near zero, 300ms apart (minimum 3 seconds).
+ */
+static void do_wait_for_zero(void)
+{
+    ESP_LOGI(TAG, "State: WAIT_FOR_ZERO (target=%.3f)", runtime_state.target_charge_weight);
+
+    ring_buf_t data_buffer;
+    ring_buf_init(&data_buffer, 10);
+
+    while (!exit_requested()) {
+        TickType_t tick_start = xTaskGetTickCount();
+
+        // Guard: need a valid target weight
+        if (runtime_state.target_charge_weight <= 0.001f) {
+            vTaskDelay(pdMS_TO_TICKS(300));
+            continue;
+        }
+
+        // Block wait for next measurement (up to 300ms)
+        float measurement;
+        if (scale_block_wait_for_measurement(300, &measurement)) {
+            ring_buf_push(&data_buffer, measurement);
+            runtime_state.current_weight = measurement;
+        }
+
+        // Check stop condition: 10 stable readings
+        if (data_buffer.count >= 10) {
+            float sd = ring_buf_sd(&data_buffer);
+            float mean = ring_buf_mean(&data_buffer);
+
+            if (sd < charge_mode_config.set_point_sd_margin &&
+                fabsf(mean) < charge_mode_config.set_point_mean_margin) {
+                ESP_LOGI(TAG, "Stable zero detected (mean=%.4f, sd=%.4f)", mean, sd);
+                runtime_state.charge_mode_state = CHARGE_MODE_WAIT_FOR_COMPLETE;
+                return;
+            }
+        }
+
+        // Wait minimum 300ms between samples
+        vTaskDelayUntil(&tick_start, pdMS_TO_TICKS(300));
+    }
+}
+
+/* ══════════════════════ Wait for Complete (PID) ══════════════════════ */
+/*
+ * Original: PID control loop using profile parameters.
+ * Coarse motor runs until error < coarse_stop_threshold.
+ * Fine motor PID runs until error < fine_stop_threshold.
+ * Speed = kp*error + ki*integral + kd*derivative, clamped to min/max.
+ */
+static void do_wait_for_complete(void)
+{
+    ESP_LOGI(TAG, "State: WAIT_FOR_COMPLETE (target=%.3f)", runtime_state.target_charge_weight);
+
+    float target = runtime_state.target_charge_weight;
+
+    // Get profile PID parameters
+    profile_t *profile = profile_get_selected();
+    if (profile) {
+        strncpy(runtime_state.profile_name, profile->name, sizeof(runtime_state.profile_name) - 1);
+    }
+
+    // Get motor speed limits from motor config and profile
+    motor_config_t coarse_cfg, fine_cfg;
+    motors_get_config(MOTOR_COARSE, &coarse_cfg);
+    motors_get_config(MOTOR_FINE, &fine_cfg);
+
+    float coarse_max_speed = fminf((float)coarse_cfg.max_speed_rps,
+                                    profile->coarse_max_flow_speed_rps);
+    float coarse_min_speed = fmaxf(coarse_cfg.min_speed_rps,
+                                    profile->coarse_min_flow_speed_rps);
+    float fine_max_speed = fminf((float)fine_cfg.max_speed_rps,
+                                  profile->fine_max_flow_speed_rps);
+    float fine_min_speed = fmaxf(fine_cfg.min_speed_rps,
+                                  profile->fine_min_flow_speed_rps);
+
+    // PID state
+    float integral = 0.0f;
+    float last_error = 0.0f;
+    TickType_t last_sample_tick = xTaskGetTickCount();
+    bool coarse_running = true;
+
+    // Enable motors
+    motor_enable(MOTOR_COARSE, true);
+    motor_enable(MOTOR_FINE, true);
+
+    // Reset timer
+    runtime_state.elapsed_time_seconds = 0.0f;
+    TickType_t charge_start_tick = xTaskGetTickCount();
+
+    ESP_LOGI(TAG, "PID: coarse kp=%.3f ki=%.3f kd=%.3f speed=[%.2f..%.2f]",
+             profile->coarse_kp, profile->coarse_ki, profile->coarse_kd,
+             coarse_min_speed, coarse_max_speed);
+    ESP_LOGI(TAG, "PID: fine   kp=%.3f ki=%.3f kd=%.3f speed=[%.2f..%.2f]",
+             profile->fine_kp, profile->fine_ki, profile->fine_kd,
+             fine_min_speed, fine_max_speed);
+
+    while (!exit_requested()) {
+        // Block wait for measurement
+        float current_weight;
+        if (!scale_block_wait_for_measurement(200, &current_weight)) {
+            continue;  // Timeout, retry
+        }
+
+        TickType_t current_tick = xTaskGetTickCount();
+        runtime_state.current_weight = current_weight;
+
+        // Update elapsed time
+        runtime_state.elapsed_time_seconds =
+            (float)((current_tick - charge_start_tick) * portTICK_PERIOD_MS) / 1000.0f;
+
+        float error = target - current_weight;
+
+        // ── Stop condition: target reached ──
+        if (error < charge_mode_config.fine_stop_threshold) {
+            ESP_LOGI(TAG, "Target reached! weight=%.4f, error=%.4f", current_weight, error);
+            motor_set_speed(MOTOR_FINE, 0);
+            motor_set_speed(MOTOR_COARSE, 0);
+            break;
+        }
+
+        // ── Coarse motor stop condition ──
+        if (error < charge_mode_config.coarse_stop_threshold && coarse_running) {
+            ESP_LOGI(TAG, "Coarse stop at weight=%.4f, error=%.4f, fine only", current_weight, error);
+            coarse_running = false;
+            motor_set_speed(MOTOR_COARSE, 0);
+        }
+
+        // ── PID calculation ──
+        float elapsed_ms = (float)((current_tick - last_sample_tick) * portTICK_PERIOD_MS);
+        if (elapsed_ms < 1.0f) elapsed_ms = 1.0f;  // Guard against division by zero
+
+        integral += error;
+        float derivative = (error - last_error) / elapsed_ms;
+
+        // Fine motor PID
+        float fine_p = profile->fine_kp * error;
+        float fine_i = profile->fine_ki * integral;
+        float fine_d = profile->fine_kd * derivative;
+        float fine_speed = fmaxf(fine_min_speed, fminf(fine_p + fine_i + fine_d, fine_max_speed));
+
+        motor_set_speed(MOTOR_FINE, fine_speed);
+
+        // Coarse motor PID
+        if (coarse_running) {
+            float coarse_p = profile->coarse_kp * error;
+            float coarse_i = profile->coarse_ki * integral;
+            float coarse_d = profile->coarse_kd * derivative;
+            float coarse_speed = fmaxf(coarse_min_speed,
+                                        fminf(coarse_p + coarse_i + coarse_d, coarse_max_speed));
+
+            motor_set_speed(MOTOR_COARSE, coarse_speed);
+        }
+
+        last_sample_tick = current_tick;
+        last_error = error;
+    }
+
+    // Stop timer
+    TickType_t now = xTaskGetTickCount();
+    runtime_state.elapsed_time_seconds =
+        (float)((now - charge_start_tick) * portTICK_PERIOD_MS) / 1000.0f;
+
+    // Precharge: run coarse motor briefly to pre-fill the tube for next charge
+    if (charge_mode_config.precharge_enable) {
+        vTaskDelay(pdMS_TO_TICKS(500));
+        motor_set_speed(MOTOR_COARSE, charge_mode_config.precharge_speed_rps);
+        motor_enable(MOTOR_COARSE, true);
+        vTaskDelay(pdMS_TO_TICKS(charge_mode_config.precharge_time_ms));
+        motor_set_speed(MOTOR_COARSE, 0);
+        motor_enable(MOTOR_COARSE, false);
+    }
+
+    // Disable motors
+    motor_enable(MOTOR_FINE, false);
+    motor_enable(MOTOR_COARSE, false);
+
+    if (!exit_requested()) {
+        runtime_state.charge_mode_state = CHARGE_MODE_WAIT_FOR_CUP_REMOVAL;
+    }
+}
+
+/* ══════════════════════ Wait for Cup Removal ══════════════════════ */
+/*
+ * Original: Wait 1s, analyze charge result (over/under/normal),
+ * then wait for 5 stable readings with mean very negative (cup removed).
+ */
+static void do_wait_for_cup_removal(void)
+{
+    ESP_LOGI(TAG, "State: WAIT_FOR_CUP_REMOVAL");
+
+    // Wait for scale to fully settle after motor stop
+    vTaskDelay(pdMS_TO_TICKS(1000));
+
+    // Post-charge analysis
+    float final_weight = scale_get_measurement();
+    if (!isnanf(final_weight)) {
+        runtime_state.current_weight = final_weight;
+        float error = runtime_state.target_charge_weight - final_weight;
+
+        if (error <= -charge_mode_config.fine_stop_threshold) {
+            // Over charged
+            runtime_state.charge_mode_event |= CHARGE_MODE_EVENT_OVER_CHARGE;
+            ESP_LOGW(TAG, "OVER CHARGE: weight=%.4f, error=%.4f", final_weight, error);
+        } else if (error >= charge_mode_config.fine_stop_threshold) {
+            // Under charged
+            runtime_state.charge_mode_event |= CHARGE_MODE_EVENT_UNDER_CHARGE;
+            ESP_LOGW(TAG, "UNDER CHARGE: weight=%.4f, error=%.4f", final_weight, error);
+        } else {
+            // Normal
+            runtime_state.charge_mode_event &= ~(CHARGE_MODE_EVENT_UNDER_CHARGE |
+                                                   CHARGE_MODE_EVENT_OVER_CHARGE);
+            ESP_LOGI(TAG, "GOOD CHARGE: weight=%.4f, error=%.4f", final_weight, error);
+        }
+    }
+
+    // Wait for cup removal: 5 stable readings, mean very negative
+    ring_buf_t data_buffer;
+    ring_buf_init(&data_buffer, 5);
+
+    while (!exit_requested()) {
+        TickType_t tick_start = xTaskGetTickCount();
+
+        float measurement;
+        if (!scale_block_wait_for_measurement(200, &measurement)) {
+            continue;
+        }
+        runtime_state.current_weight = measurement;
+        ring_buf_push(&data_buffer, measurement);
+
+        // Stop condition: 5 stable readings with very negative mean (cup removed)
+        if (data_buffer.count >= 5) {
+            float sd = ring_buf_sd(&data_buffer);
+            float mean = ring_buf_mean(&data_buffer);
+
+            // Original: mean + 10 < margin (meaning mean < margin - 10, so very negative)
+            if (sd < charge_mode_config.set_point_sd_margin &&
+                mean + 10.0f < charge_mode_config.set_point_mean_margin) {
+                ESP_LOGI(TAG, "Cup removed (mean=%.4f, sd=%.4f)", mean, sd);
+                break;
+            }
+        }
+
+        vTaskDelayUntil(&tick_start, pdMS_TO_TICKS(300));
+    }
+
+    if (!exit_requested()) {
+        runtime_state.charge_mode_state = CHARGE_MODE_WAIT_FOR_CUP_RETURN;
+    }
+}
+
+/* ══════════════════════ Wait for Cup Return ══════════════════════ */
+/*
+ * Original: Wait for weight >= 0 (cup placed back on scale).
+ */
+static void do_wait_for_cup_return(void)
+{
+    ESP_LOGI(TAG, "State: WAIT_FOR_CUP_RETURN");
+
+    while (!exit_requested()) {
+        TickType_t tick_start = xTaskGetTickCount();
+
+        float measurement;
+        if (!scale_block_wait_for_measurement(200, &measurement)) {
+            continue;
+        }
+        runtime_state.current_weight = measurement;
+
+        // Cup returned when weight goes positive (cup on scale near zero)
+        if (measurement >= 0.0f) {
+            ESP_LOGI(TAG, "Cup returned (weight=%.4f)", measurement);
+            break;
+        }
+
+        vTaskDelayUntil(&tick_start, pdMS_TO_TICKS(20));
+    }
+
+    if (!exit_requested()) {
+        runtime_state.charge_mode_state = CHARGE_MODE_WAIT_FOR_ZERO;
+    }
+}
+
+/* ══════════════════════ Main Task ══════════════════════ */
+
 static void charge_mode_task(void *pvParameters)
 {
     ESP_LOGI(TAG, "Charge mode task started");
 
-    bool coarse_running = false;
-    bool fine_running = false;
-    bool settling = false;       // true = motors stopped, waiting for scale to settle
-    int stable_count = 0;        // consecutive stable readings counter
-    float prev_weight = 0.0f;    // previous reading for stability check
-    float coarse_speed = 0.0f;   // current coarse motor speed (ramped)
-    float fine_speed = 0.0f;     // current fine motor speed (ramped)
-
     while (1) {
-        float weight = scale_get_measurement();
-
-        // Update runtime weight for REST API
-        if (!isnanf(weight)) {
-            runtime_state.current_weight = weight;
-        }
-
         switch (runtime_state.charge_mode_state) {
-
             case CHARGE_MODE_WAIT_FOR_ZERO:
-                if (coarse_running || fine_running) {
-                    stop_all_motors();
-                    coarse_running = false;
-                    fine_running = false;
-                }
-                // Guard: need a valid target
-                if (runtime_state.target_charge_weight <= 0.001f) {
-                    stable_count = 0;
-                    break;
-                }
-                // Require N consecutive stable readings near zero
-                if (!isnanf(weight) && fabsf(weight) <= ZERO_TOLERANCE_G
-                    && fabsf(weight - prev_weight) <= STABLE_TOLERANCE_G) {
-                    stable_count++;
-                } else {
-                    stable_count = 0;
-                }
-                if (stable_count >= ZERO_STABLE_COUNT) {
-                    stable_count = 0;
-                    settling = false;
-                    ESP_LOGI(TAG, "Stable zero (%.4f), starting dispense to %.4f",
-                             weight, runtime_state.target_charge_weight);
-                    motor_enable(MOTOR_COARSE, true);
-                    motor_enable(MOTOR_FINE, true);
-                    // Start above static friction threshold
-                    coarse_speed = COARSE_START_RPS;
-                    fine_speed = FINE_START_RPS;
-                    motor_set_speed(MOTOR_COARSE, coarse_speed);
-                    motor_set_speed(MOTOR_FINE, fine_speed);
-                    coarse_running = true;
-                    fine_running = true;
-                    runtime_state.elapsed_time_seconds = 0.0f;
-                    runtime_state.charge_mode_state = CHARGE_MODE_WAIT_FOR_COMPLETE;
-                }
+                do_wait_for_zero();
                 break;
-
             case CHARGE_MODE_WAIT_FOR_COMPLETE:
-                if (!isnanf(weight)) {
-                    runtime_state.elapsed_time_seconds += TASK_PERIOD_MS / 1000.0f;
-                    float target = runtime_state.target_charge_weight;
-
-                    if (settling) {
-                        // Waiting for scale to settle after motors stopped
-                        if (fabsf(weight - prev_weight) <= STABLE_TOLERANCE_G) {
-                            stable_count++;
-                        } else {
-                            stable_count = 0;
-                        }
-                        if (stable_count >= SETTLE_STABLE_COUNT) {
-                            ESP_LOGI(TAG, "Scale settled, final: %.4f (target: %.4f)",
-                                     weight, target);
-                            stable_count = 0;
-                            settling = false;
-                            runtime_state.charge_mode_state = CHARGE_MODE_WAIT_FOR_CUP_REMOVAL;
-                        }
-                    } else if (weight >= target - charge_mode_config.fine_stop_threshold) {
-                        // Target reached - stop all motors, begin settling
-                        ESP_LOGI(TAG, "Target reached (%.4f), settling...", weight);
-                        stop_all_motors();
-                        coarse_running = false;
-                        fine_running = false;
-                        coarse_speed = 0.0f;
-                        fine_speed = 0.0f;
-                        settling = true;
-                        stable_count = 0;
-                    } else if (coarse_running &&
-                               weight >= target - charge_mode_config.coarse_stop_threshold) {
-                        // Near target - switch to fine motor only
-                        ESP_LOGI(TAG, "Coarse stop (%.4f), fine only", weight);
-                        motor_set_speed(MOTOR_COARSE, 0.0f);
-                        motor_enable(MOTOR_COARSE, false);
-                        coarse_running = false;
-                        coarse_speed = 0.0f;
-                    } else {
-                        // Motors running - apply acceleration ramp
-                        if (coarse_running && coarse_speed < COARSE_SPEED_RPS) {
-                            coarse_speed += COARSE_ACCEL_RPS_PER_TICK;
-                            if (coarse_speed > COARSE_SPEED_RPS) coarse_speed = COARSE_SPEED_RPS;
-                            motor_set_speed(MOTOR_COARSE, coarse_speed);
-                        }
-                        if (fine_running && fine_speed < FINE_SPEED_RPS) {
-                            fine_speed += FINE_ACCEL_RPS_PER_TICK;
-                            if (fine_speed > FINE_SPEED_RPS) fine_speed = FINE_SPEED_RPS;
-                            motor_set_speed(MOTOR_FINE, fine_speed);
-                        }
-                    }
-                }
+                do_wait_for_complete();
                 break;
-
             case CHARGE_MODE_WAIT_FOR_CUP_REMOVAL:
-                // Detect cup removal: weight drops negative (below tare point)
-                if (!isnanf(weight) && weight < CUP_REMOVED_G) {
-                    stable_count++;
-                } else {
-                    stable_count = 0;
-                }
-                if (stable_count >= CUP_REMOVE_COUNT) {
-                    stable_count = 0;
-                    ESP_LOGI(TAG, "Cup removed (%.4f)", weight);
-                    runtime_state.charge_mode_state = CHARGE_MODE_WAIT_FOR_CUP_RETURN;
-                }
+                do_wait_for_cup_removal();
                 break;
-
             case CHARGE_MODE_WAIT_FOR_CUP_RETURN:
-                // Detect cup return: N stable readings near zero (empty cup on scale)
-                if (!isnanf(weight) && weight >= CUP_REMOVED_G && weight < CUP_RETURNED_MAX_G
-                    && fabsf(weight - prev_weight) <= STABLE_TOLERANCE_G) {
-                    stable_count++;
-                } else {
-                    stable_count = 0;
-                }
-                if (stable_count >= CUP_RETURN_STABLE_COUNT) {
-                    stable_count = 0;
-                    ESP_LOGI(TAG, "Cup returned, stable at %.4f", weight);
-                    runtime_state.charge_mode_state = CHARGE_MODE_WAIT_FOR_ZERO;
-                }
+                do_wait_for_cup_return();
                 break;
-
             case CHARGE_MODE_EXIT:
             default:
-                if (coarse_running || fine_running) {
-                    stop_all_motors();
-                    coarse_running = false;
-                    fine_running = false;
-                }
-                stable_count = 0;
-                settling = false;
+                // Idle - wait for REST API to start charge mode
+                vTaskDelay(pdMS_TO_TICKS(100));
                 break;
         }
-
-        prev_weight = (!isnanf(weight)) ? weight : prev_weight;
-        vTaskDelay(pdMS_TO_TICKS(TASK_PERIOD_MS));
     }
 }
+
+/* ══════════════════════ Init / NVS ══════════════════════ */
 
 esp_err_t charge_mode_init(void)
 {
     ESP_LOGI(TAG, "Initializing charge mode module");
 
-    // Try to load saved configuration
     charge_mode_config_t temp_config;
     if (charge_mode_load_config(&temp_config) == ESP_OK) {
         charge_mode_config = temp_config;
@@ -266,7 +465,6 @@ esp_err_t charge_mode_init(void)
              charge_mode_config.coarse_stop_threshold,
              charge_mode_config.fine_stop_threshold);
 
-    // Start charge mode task
     BaseType_t ret = xTaskCreate(charge_mode_task, "charge_mode",
                                   TASK_STACK, NULL, TASK_PRIORITY, NULL);
     if (ret != pdPASS) {
@@ -290,7 +488,6 @@ esp_err_t charge_mode_save_config(const charge_mode_config_t *config)
         return ret;
     }
 
-    // Save config with version
     charge_mode_config_t config_to_save = *config;
     config_to_save.config_version = CONFIG_VERSION;
 
@@ -306,7 +503,6 @@ esp_err_t charge_mode_save_config(const charge_mode_config_t *config)
         ESP_LOGE(TAG, "Error committing NVS: %s", esp_err_to_name(ret));
     } else {
         ESP_LOGI(TAG, "Charge mode config saved successfully");
-        // Update local copy
         charge_mode_config = config_to_save;
     }
 
@@ -340,10 +536,7 @@ esp_err_t charge_mode_load_config(charge_mode_config_t *config)
 
 esp_err_t charge_mode_get_config(charge_mode_config_t *config)
 {
-    if (!config) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
+    if (!config) return ESP_ERR_INVALID_ARG;
     *config = charge_mode_config;
     return ESP_OK;
 }
@@ -364,9 +557,6 @@ esp_err_t charge_mode_set_state(charge_mode_state_t state)
         ESP_LOGI(TAG, "Exiting charge mode - stopping motors");
         stop_all_motors();
         runtime_state.elapsed_time_seconds = 0.0f;
-    } else if (state == CHARGE_MODE_WAIT_FOR_ZERO &&
-               runtime_state.charge_mode_state == CHARGE_MODE_EXIT) {
-        ESP_LOGI(TAG, "Entering charge mode");
     }
 
     runtime_state.charge_mode_state = state;
@@ -375,37 +565,21 @@ esp_err_t charge_mode_set_state(charge_mode_state_t state)
 
 esp_err_t charge_mode_get_runtime_state(charge_mode_state_t_runtime *state)
 {
-    if (!state) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
+    if (!state) return ESP_ERR_INVALID_ARG;
     *state = runtime_state;
     return ESP_OK;
 }
 
 uint32_t hex_string_to_decimal(const char *string)
 {
-    uint32_t value = 0;
+    if (!string) return 0;
 
-    if (!string) {
-        return 0;
-    }
-
-    // Handle URL-encoded # (%23)
     const char *hex_start = string;
     if (string[0] == '%' && string[1] == '2' && string[2] == '3') {
-        // URL-encoded # found, skip %23
         hex_start = string + 3;
     } else if (string[0] == '#') {
-        // Regular # found, skip it
         hex_start = string + 1;
-    } else {
-        // No # found, assume it's already just hex digits
-        hex_start = string;
     }
 
-    // Parse hex string
-    value = strtol(hex_start, NULL, 16);
-
-    return value;
+    return strtol(hex_start, NULL, 16);
 }

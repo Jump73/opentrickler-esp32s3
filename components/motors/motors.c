@@ -28,11 +28,13 @@ static mcpwm_timer_handle_t coarse_mcpwm_timer = NULL;
 static mcpwm_oper_handle_t coarse_mcpwm_oper = NULL;
 static mcpwm_cmpr_handle_t coarse_mcpwm_cmpr = NULL;
 static mcpwm_gen_handle_t coarse_mcpwm_gen = NULL;
+static bool coarse_mcpwm_running = false;
 
 static mcpwm_timer_handle_t fine_mcpwm_timer = NULL;
 static mcpwm_oper_handle_t fine_mcpwm_oper = NULL;
 static mcpwm_cmpr_handle_t fine_mcpwm_cmpr = NULL;
 static mcpwm_gen_handle_t fine_mcpwm_gen = NULL;
+static bool fine_mcpwm_running = false;
 
 // Default configurations
 static motor_config_t coarse_motor_config = {
@@ -98,6 +100,7 @@ static esp_err_t motor_mcpwm_init(motor_type_t motor)
         .resolution_hz = 10000000,  // 10 MHz resolution for precise timing
         .count_mode = MCPWM_TIMER_COUNT_MODE_UP,
         .period_ticks = 10000,  // Initial period (1 kHz = 10MHz / 10000)
+        .flags.update_period_on_empty = true,  // Update period at end of cycle (glitch-free)
     };
     ESP_ERROR_CHECK(mcpwm_new_timer(&timer_config, timer));
 
@@ -417,9 +420,14 @@ esp_err_t motor_set_speed(motor_type_t motor, float speed_rps)
     // Get absolute speed
     float abs_speed_rps = fabsf(speed_rps);
 
+    bool *running = (motor == MOTOR_COARSE) ? &coarse_mcpwm_running : &fine_mcpwm_running;
+
     // Stop motor if speed is too low or zero
     if (abs_speed_rps < 0.001f) {
-        mcpwm_timer_start_stop(timer, MCPWM_TIMER_STOP_EMPTY);
+        if (*running) {
+            mcpwm_timer_start_stop(timer, MCPWM_TIMER_STOP_EMPTY);
+            *running = false;
+        }
         ESP_LOGD(TAG, "%s motor stopped (speed=0)",
                  (motor == MOTOR_COARSE) ? "Coarse" : "Fine");
         return ESP_OK;
@@ -452,10 +460,13 @@ esp_err_t motor_set_speed(motor_type_t motor, float speed_rps)
     // Update comparator to maintain 50% duty cycle
     mcpwm_comparator_set_compare_value(cmpr, period_ticks / 2);
 
-    // Start timer if not already running
-    mcpwm_timer_start_stop(timer, MCPWM_TIMER_START_NO_STOP);
+    // Start timer only if not already running (avoid glitches from repeated starts)
+    if (!*running) {
+        mcpwm_timer_start_stop(timer, MCPWM_TIMER_START_NO_STOP);
+        *running = true;
+    }
 
-    ESP_LOGI(TAG, "%s motor: speed=%.3f rps, step_freq=%.1f Hz, period=%lu ticks",
+    ESP_LOGD(TAG, "%s motor: speed=%.3f rps, step_freq=%.1f Hz, period=%lu ticks",
              (motor == MOTOR_COARSE) ? "Coarse" : "Fine",
              speed_rps, step_freq_hz, period_ticks);
 

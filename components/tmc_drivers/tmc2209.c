@@ -181,11 +181,8 @@ bool TMC2209_Init (TMC2209_t *driver)
     driver->gconf.reg.pdn_disable = 1;
     driver->gconf.reg.mstep_reg_select = 1;
     driver->gconf.reg.I_scale_analog = 0;
-
-// Use default settings (from OTP) for these:
-//  driver->gconf.reg.internal_Rsense = 0;
-//  driver->gconf.reg.en_spreadcycle = 0;
-//  driver->gconf.reg.multistep_filt = 1;
+    driver->gconf.reg.en_spreadcycle = 0;  // Force StealthChop (quiet mode)
+    driver->gconf.reg.multistep_filt = 1;
 
     TMC2209_ReadRegister(driver, (TMC2209_datagram_t *)&driver->ifcnt);
 
