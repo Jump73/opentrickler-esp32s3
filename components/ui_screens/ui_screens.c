@@ -61,14 +61,20 @@ static lv_obj_t *s_scr_main_menu = NULL;
 static lv_obj_t *s_scr_profile_select = NULL;
 
 static lv_obj_t *s_scr_weight_input = NULL;
-static lv_obj_t *s_lbl_weight_value = NULL;
-static lv_obj_t *s_weight_container = NULL;
 static float s_target_weight = 41.50f;
+
+// Per-digit weight editor
+#define MAX_WEIGHT_DIGITS 5
+static lv_obj_t *s_digit_btns[MAX_WEIGHT_DIGITS] = {0};
+static int s_wd[MAX_WEIGHT_DIGITS] = {4, 1, 5, 0, 0}; // tens, ones, tenths, hundredths, thousandths
+static int s_weight_num_frac = 2; // 2 or 3 decimal places
 
 static lv_obj_t *s_scr_charge = NULL;
 static lv_obj_t *s_lbl_charge_title = NULL;
 static lv_obj_t *s_lbl_charge_timer = NULL;
+static lv_obj_t *s_lbl_charge_target = NULL;
 static lv_obj_t *s_lbl_charge_weight = NULL;
+static lv_obj_t *s_lbl_charge_result = NULL;
 static lv_obj_t *s_lbl_charge_profile = NULL;
 
 static lv_obj_t *s_scr_cleanup = NULL;
@@ -185,9 +191,44 @@ static const char *charge_state_name(charge_mode_state_t state)
 
 // Forward declarations for dynamic screens
 static void rebuild_profile_select(void);
+static void rebuild_weight_input(void);
 static void rebuild_scale_driver_screen(void);
 static void rebuild_scale_baudrate_screen(void);
 static void rebuild_profile_view(uint8_t idx);
+
+// ---------------------------------------------------------------------------
+// Weight digit helpers
+// ---------------------------------------------------------------------------
+static void weight_to_digits(float w)
+{
+    if (s_weight_num_frac == 3) {
+        int val = (int)(w * 1000.0f + 0.5f);
+        if (val < 0) val = 0;
+        if (val > 99999) val = 99999;
+        s_wd[0] = (val / 10000) % 10;
+        s_wd[1] = (val / 1000) % 10;
+        s_wd[2] = (val / 100) % 10;
+        s_wd[3] = (val / 10) % 10;
+        s_wd[4] = val % 10;
+    } else {
+        int val = (int)(w * 100.0f + 0.5f);
+        if (val < 0) val = 0;
+        if (val > 9999) val = 9999;
+        s_wd[0] = (val / 1000) % 10;
+        s_wd[1] = (val / 100) % 10;
+        s_wd[2] = (val / 10) % 10;
+        s_wd[3] = val % 10;
+        s_wd[4] = 0;
+    }
+}
+
+static float digits_to_weight(void)
+{
+    float w = s_wd[0] * 10.0f + (float)s_wd[1];
+    w += s_wd[2] * 0.1f + s_wd[3] * 0.01f;
+    if (s_weight_num_frac >= 3) w += s_wd[4] * 0.001f;
+    return w;
+}
 
 // =========================================================================
 // EVENT CALLBACKS
@@ -247,48 +288,62 @@ static void evt_select_profile(lv_event_t *e)
         s_target_weight = rt.target_charge_weight;
     }
 
-    char buf[16];
+    // Determine decimal places from config
     charge_mode_config_t cfg;
+    s_weight_num_frac = 2;
     if (charge_mode_get_config(&cfg) == ESP_OK && cfg.decimal_places == DP_3) {
-        snprintf(buf, sizeof(buf), "%.3f", s_target_weight);
-    } else {
-        snprintf(buf, sizeof(buf), "%.2f", s_target_weight);
+        s_weight_num_frac = 3;
     }
-    lv_label_set_text(s_lbl_weight_value, buf);
+
+    // Convert float weight to individual digits
+    weight_to_digits(s_target_weight);
+
+    // Rebuild the weight input screen with digit buttons
+    rebuild_weight_input();
 
     switch_to_screen(SCR_WEIGHT_INPUT, s_scr_weight_input);
     group_add_children(s_scr_weight_input);
     ESP_LOGI(TAG, "Profile %d selected -> Weight Input", idx);
 }
 
-// --- Weight input ---
-static void evt_weight_key(lv_event_t *e)
+// --- Weight input: per-digit click handler ---
+// Matches original OpenTrickler behavior:
+//   Encoder rotation = navigate between digits (standard group navigation)
+//   Encoder click    = increment current digit by 1 (wraps 9 -> 0)
+static void evt_digit_click(lv_event_t *e)
 {
-    uint32_t key = lv_event_get_key(e);
-    float step = 0.10f;
-    const char *fmt = "%.2f";
-    charge_mode_config_t cfg;
-    if (charge_mode_get_config(&cfg) == ESP_OK && cfg.decimal_places == DP_3) {
-        step = 0.020f;
-        fmt = "%.3f";
-    }
+    int idx = (int)(uintptr_t)lv_event_get_user_data(e);
+    if (idx < 0 || idx >= MAX_WEIGHT_DIGITS) return;
 
-    if (key == LV_KEY_RIGHT) s_target_weight += step;
-    else if (key == LV_KEY_LEFT) {
-        s_target_weight -= step;
-        if (s_target_weight < 0.0f) s_target_weight = 0.0f;
-    }
+    s_wd[idx] = (s_wd[idx] + 1) % 10;
 
-    char buf[16];
-    snprintf(buf, sizeof(buf), fmt, s_target_weight);
-    lv_label_set_text(s_lbl_weight_value, buf);
+    // Update the digit label
+    char d[2] = { '0' + s_wd[idx], '\0' };
+    lv_obj_t *btn = lv_event_get_target(e);
+    lv_obj_t *lbl = lv_obj_get_child(btn, 0);
+    if (lbl) lv_label_set_text(lbl, d);
+
+    // Keep float in sync
+    s_target_weight = digits_to_weight();
 }
 
 static void evt_start_charging(lv_event_t *e)
 {
     (void)e;
+    s_target_weight = digits_to_weight();
     charge_mode_set_target_weight(s_target_weight);
     charge_mode_set_state(CHARGE_MODE_WAIT_FOR_ZERO);
+
+    // Show target weight on charge screen
+    static char tgt_buf[24];
+    charge_mode_config_t cfg;
+    if (charge_mode_get_config(&cfg) == ESP_OK && cfg.decimal_places == DP_3) {
+        snprintf(tgt_buf, sizeof(tgt_buf), "Target: %.3f", s_target_weight);
+    } else {
+        snprintf(tgt_buf, sizeof(tgt_buf), "Target: %.2f", s_target_weight);
+    }
+    lv_label_set_text(s_lbl_charge_target, tgt_buf);
+
     switch_to_screen(SCR_CHARGE_MODE, s_scr_charge);
     group_add_children(s_scr_charge);
     ESP_LOGI(TAG, "-> Charge Mode (target=%.2f)", s_target_weight);
@@ -454,52 +509,97 @@ static void rebuild_profile_select(void)
     create_menu_btn(s_scr_profile_select, "< Back", evt_goto_main, NULL);
 }
 
-static void create_weight_input_screen(void)
+// Rebuild weight input screen with per-digit editable buttons.
+// Each digit is an LVGL editable button:
+//   - Rotate encoder to navigate between digits / Start / Back
+//   - Click on a digit to enter edit mode
+//   - In edit mode: rotate to change digit value (0-9 wrapping)
+//   - Click again to exit edit mode and navigate to next digit
+static void rebuild_weight_input(void)
 {
+    if (s_scr_weight_input) lv_obj_delete(s_scr_weight_input);
+    memset(s_digit_btns, 0, sizeof(s_digit_btns));
+
     s_scr_weight_input = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(s_scr_weight_input, lv_color_white(), 0);
-    lv_obj_set_style_pad_all(s_scr_weight_input, 2, 0);
+    lv_obj_set_style_pad_all(s_scr_weight_input, 0, 0);
     lv_obj_set_style_border_width(s_scr_weight_input, 0, 0);
 
-    lv_obj_t *t = lv_label_create(s_scr_weight_input);
-    lv_obj_set_style_text_font(t, &lv_font_unscii_8, 0);
-    lv_label_set_text(t, "Set Weight:");
-    lv_obj_align(t, LV_ALIGN_TOP_LEFT, 0, 0);
+    int num_digits = 2 + s_weight_num_frac;  // 4 or 5 total
 
-    // Weight container: click to enter edit mode, rotate to adjust
-    s_weight_container = lv_obj_create(s_scr_weight_input);
-    lv_obj_set_size(s_weight_container, 120, 24);
-    lv_obj_align(s_weight_container, LV_ALIGN_CENTER, 0, -6);
-    lv_obj_remove_flag(s_weight_container, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(s_weight_container, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_style_radius(s_weight_container, 0, 0);
-    lv_obj_set_style_pad_all(s_weight_container, 2, 0);
-    lv_obj_set_style_border_width(s_weight_container, 1, LV_STATE_DEFAULT);
-    lv_obj_set_style_border_width(s_weight_container, 2, LV_STATE_FOCUSED);
-    lv_obj_set_style_border_color(s_weight_container, lv_color_black(), 0);
-    lv_obj_set_style_bg_color(s_weight_container, lv_color_white(), LV_STATE_DEFAULT);
-    lv_obj_set_style_bg_color(s_weight_container, lv_color_black(), LV_STATE_FOCUSED);
-    lv_obj_set_style_bg_opa(s_weight_container, LV_OPA_COVER, 0);
-    // Text color on container so child label inherits (including focused state)
-    lv_obj_set_style_text_color(s_weight_container, lv_color_black(), LV_STATE_DEFAULT);
-    lv_obj_set_style_text_color(s_weight_container, lv_color_white(), LV_STATE_FOCUSED);
-    lv_obj_add_event_cb(s_weight_container, evt_weight_key, LV_EVENT_KEY, NULL);
+    // Title
+    lv_obj_t *title = lv_label_create(s_scr_weight_input);
+    lv_obj_set_style_text_font(title, &lv_font_unscii_8, 0);
+    lv_label_set_text(title, "Set Weight:");
+    lv_obj_set_pos(title, 2, 2);
 
-    s_lbl_weight_value = lv_label_create(s_weight_container);
-    lv_obj_set_style_text_font(s_lbl_weight_value, &lv_font_unscii_16, 0);
-    lv_label_set_text(s_lbl_weight_value, "41.50");
-    lv_obj_center(s_lbl_weight_value);
+    // Digit buttons layout: [D0][D1].[D2][D3]  or  [D0][D1].[D2][D3][D4]
+    int btn_w = 16, btn_h = 22;
+    int dot_w = 8;
+    int gr_w = 18;
+    int total_w = num_digits * btn_w + dot_w + gr_w;
+    int start_x = (128 - total_w) / 2;
+    int y = 14;
+    int x = start_x;
 
-    lv_obj_t *h = lv_label_create(s_scr_weight_input);
-    lv_obj_set_style_text_font(h, &lv_font_unscii_8, 0);
-    lv_label_set_text(h, "Click:Edit Turn:Adj");
-    lv_obj_align(h, LV_ALIGN_BOTTOM_LEFT, 0, -14);
+    for (int i = 0; i < num_digits; i++) {
+        // Insert decimal point after the 2 integer digits
+        if (i == 2) {
+            lv_obj_t *dot = lv_label_create(s_scr_weight_input);
+            lv_obj_set_style_text_font(dot, &lv_font_unscii_16, 0);
+            lv_label_set_text(dot, ".");
+            lv_obj_set_pos(dot, x, y + 3);
+            x += dot_w;
+        }
 
+        lv_obj_t *btn = lv_button_create(s_scr_weight_input);
+        lv_obj_set_size(btn, btn_w, btn_h);
+        lv_obj_set_pos(btn, x, y);
+        lv_obj_set_style_radius(btn, 0, 0);
+        lv_obj_set_style_pad_all(btn, 0, 0);
+
+        // Default: black text on white, thin border
+        lv_obj_set_style_bg_color(btn, lv_color_white(), LV_STATE_DEFAULT);
+        lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
+        lv_obj_set_style_text_color(btn, lv_color_black(), LV_STATE_DEFAULT);
+        lv_obj_set_style_border_width(btn, 1, LV_STATE_DEFAULT);
+        lv_obj_set_style_border_color(btn, lv_color_black(), LV_STATE_DEFAULT);
+
+        // Focused: inverted (white on black)
+        lv_obj_set_style_bg_color(btn, lv_color_black(), LV_STATE_FOCUSED);
+        lv_obj_set_style_text_color(btn, lv_color_white(), LV_STATE_FOCUSED);
+        lv_obj_set_style_border_width(btn, 0, LV_STATE_FOCUSED);
+
+        // Digit label
+        char d[2] = { '0' + s_wd[i], '\0' };
+        lv_obj_t *lbl = lv_label_create(btn);
+        lv_obj_set_style_text_font(lbl, &lv_font_unscii_16, 0);
+        lv_label_set_text(lbl, d);
+        lv_obj_center(lbl);
+
+        lv_obj_add_event_cb(btn, evt_digit_click, LV_EVENT_CLICKED, (void*)(uintptr_t)i);
+        s_digit_btns[i] = btn;
+        x += btn_w;
+    }
+
+    // "gr" unit label
+    lv_obj_t *unit = lv_label_create(s_scr_weight_input);
+    lv_obj_set_style_text_font(unit, &lv_font_unscii_8, 0);
+    lv_label_set_text(unit, "gr");
+    lv_obj_set_pos(unit, x + 4, y + 7);
+
+    // Hint
+    lv_obj_t *hint = lv_label_create(s_scr_weight_input);
+    lv_obj_set_style_text_font(hint, &lv_font_unscii_8, 0);
+    lv_label_set_text(hint, "Turn:Move Click:+1");
+    lv_obj_set_pos(hint, 2, 40);
+
+    // Start and Back buttons
     lv_obj_t *bs = create_inline_btn(s_scr_weight_input, "Start", 56, 12, evt_start_charging);
-    lv_obj_align(bs, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+    lv_obj_align(bs, LV_ALIGN_BOTTOM_LEFT, 2, -2);
 
     lv_obj_t *bb = create_inline_btn(s_scr_weight_input, "< Back", 56, 12, evt_back_to_profiles);
-    lv_obj_align(bb, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
+    lv_obj_align(bb, LV_ALIGN_BOTTOM_RIGHT, -2, -2);
 }
 
 static void create_charge_screen(void)
@@ -519,10 +619,23 @@ static void create_charge_screen(void)
     lv_label_set_text(s_lbl_charge_timer, "");
     lv_obj_align(s_lbl_charge_timer, LV_ALIGN_TOP_RIGHT, 0, 0);
 
+    // Target weight (set when entering charge mode)
+    s_lbl_charge_target = lv_label_create(s_scr_charge);
+    lv_obj_set_style_text_font(s_lbl_charge_target, &lv_font_unscii_8, 0);
+    lv_label_set_text(s_lbl_charge_target, "");
+    lv_obj_align(s_lbl_charge_target, LV_ALIGN_TOP_LEFT, 0, 12);
+
+    // Current weight (large, centered)
     s_lbl_charge_weight = lv_label_create(s_scr_charge);
     lv_obj_set_style_text_font(s_lbl_charge_weight, &lv_font_unscii_16, 0);
     lv_label_set_text(s_lbl_charge_weight, "---");
-    lv_obj_align(s_lbl_charge_weight, LV_ALIGN_CENTER, 0, -4);
+    lv_obj_align(s_lbl_charge_weight, LV_ALIGN_CENTER, 0, 2);
+
+    // Over/under charge result (shown only in WAIT_FOR_CUP_REMOVAL)
+    s_lbl_charge_result = lv_label_create(s_scr_charge);
+    lv_obj_set_style_text_font(s_lbl_charge_result, &lv_font_unscii_8, 0);
+    lv_label_set_text(s_lbl_charge_result, "");
+    lv_obj_align(s_lbl_charge_result, LV_ALIGN_CENTER, 0, 18);
 
     s_lbl_charge_profile = lv_label_create(s_scr_charge);
     lv_obj_set_style_text_font(s_lbl_charge_profile, &lv_font_unscii_8, 0);
@@ -690,7 +803,7 @@ void ui_screens_init(void)
     }
 
     create_main_menu();
-    create_weight_input_screen();
+    rebuild_weight_input();
     create_charge_screen();
     create_cleanup_screen();
     create_wireless_screen();
@@ -745,7 +858,21 @@ void ui_screens_update(void)
             }
             lv_label_set_text(s_lbl_charge_weight, weight_buf);
         }
-        lv_obj_align(s_lbl_charge_weight, LV_ALIGN_CENTER, 0, -4);
+        lv_obj_align(s_lbl_charge_weight, LV_ALIGN_CENTER, 0, 2);
+
+        // Show over/under charge only when dispensing is done and cup is still on scale
+        if (rt.charge_mode_state == CHARGE_MODE_WAIT_FOR_CUP_REMOVAL && weight_valid) {
+            if (weight > rt.target_charge_weight + 0.02f) {
+                lv_label_set_text(s_lbl_charge_result, "OVER CHARGE");
+            } else if (weight < rt.target_charge_weight - 0.02f) {
+                lv_label_set_text(s_lbl_charge_result, "UNDER CHARGE");
+            } else {
+                lv_label_set_text(s_lbl_charge_result, "OK");
+            }
+        } else {
+            lv_label_set_text(s_lbl_charge_result, "");
+        }
+        lv_obj_align(s_lbl_charge_result, LV_ALIGN_CENTER, 0, 18);
 
         if (rt.profile_name[0] != '\0') {
             lv_label_set_text(s_lbl_charge_profile, rt.profile_name);
