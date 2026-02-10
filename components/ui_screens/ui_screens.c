@@ -629,13 +629,13 @@ static void create_charge_screen(void)
     s_lbl_charge_weight = lv_label_create(s_scr_charge);
     lv_obj_set_style_text_font(s_lbl_charge_weight, &lv_font_unscii_16, 0);
     lv_label_set_text(s_lbl_charge_weight, "---");
-    lv_obj_align(s_lbl_charge_weight, LV_ALIGN_CENTER, 0, 2);
+    lv_obj_align(s_lbl_charge_weight, LV_ALIGN_CENTER, 0, -2);
 
     // Over/under charge result (shown only in WAIT_FOR_CUP_REMOVAL)
     s_lbl_charge_result = lv_label_create(s_scr_charge);
     lv_obj_set_style_text_font(s_lbl_charge_result, &lv_font_unscii_8, 0);
     lv_label_set_text(s_lbl_charge_result, "");
-    lv_obj_align(s_lbl_charge_result, LV_ALIGN_CENTER, 0, 18);
+    lv_obj_align(s_lbl_charge_result, LV_ALIGN_CENTER, 0, 11);
 
     s_lbl_charge_profile = lv_label_create(s_scr_charge);
     lv_obj_set_style_text_font(s_lbl_charge_profile, &lv_font_unscii_8, 0);
@@ -858,7 +858,7 @@ void ui_screens_update(void)
             }
             lv_label_set_text(s_lbl_charge_weight, weight_buf);
         }
-        lv_obj_align(s_lbl_charge_weight, LV_ALIGN_CENTER, 0, 2);
+        lv_obj_align(s_lbl_charge_weight, LV_ALIGN_CENTER, 0, -2);
 
         // Show over/under charge only when dispensing is done and cup is still on scale
         if (rt.charge_mode_state == CHARGE_MODE_WAIT_FOR_CUP_REMOVAL && weight_valid) {
@@ -872,7 +872,7 @@ void ui_screens_update(void)
         } else {
             lv_label_set_text(s_lbl_charge_result, "");
         }
-        lv_obj_align(s_lbl_charge_result, LV_ALIGN_CENTER, 0, 18);
+        lv_obj_align(s_lbl_charge_result, LV_ALIGN_CENTER, 0, 11);
 
         if (rt.profile_name[0] != '\0') {
             lv_label_set_text(s_lbl_charge_profile, rt.profile_name);
