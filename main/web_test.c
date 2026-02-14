@@ -169,6 +169,13 @@ void app_main(void)
         // Don't return - display can work without backlight
     }
 
+    // Step 9b: External PWM3 LED (GPIO9) - mirrors LED1 colour
+    ESP_LOGI(TAG, "Step 9b: Initializing PWM3 external LED on GPIO%d...", NEOPIXEL_PWM3);
+    ret = neopixel_pwm3_init(NEOPIXEL_PWM3);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "PWM3 LED init failed: %s (external LED unavailable)", esp_err_to_name(ret));
+    }
+
     // Step 10: LVGL port + UI
     ESP_LOGI(TAG, "Step 10: Initializing LVGL...");
     {

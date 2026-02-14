@@ -7,6 +7,7 @@
  */
 
 #include "charge_mode.h"
+#include "neopixel_led.h"
 #include "motors.h"
 #include "scale.h"
 #include "profile.h"
@@ -133,6 +134,31 @@ static inline bool exit_requested(void)
     return runtime_state.charge_mode_state == CHARGE_MODE_EXIT;
 }
 
+/* Set LED colour for charge mode status feedback.
+   Mirrors original: backlight stays at default, led1 & led2 show status colour. */
+static void charge_mode_set_led(uint32_t status_colour)
+{
+    neopixel_led_config_t led_cfg;
+    neopixel_led_get_config(&led_cfg);
+    neopixel_led_set_colour(
+        led_cfg.default_led_colours.mini12864_backlight_colour,
+        status_colour,
+        status_colour
+    );
+}
+
+/* Reset LEDs to default colours (backlight + led1 + led2 all default). */
+static void charge_mode_reset_led(void)
+{
+    neopixel_led_config_t led_cfg;
+    neopixel_led_get_config(&led_cfg);
+    neopixel_led_set_colour(
+        led_cfg.default_led_colours.mini12864_backlight_colour,
+        led_cfg.default_led_colours.led1_colour,
+        led_cfg.default_led_colours.led2_colour
+    );
+}
+
 /* ══════════════════════ Wait for Zero ══════════════════════ */
 /*
  * Original: FloatRingBuffer(10), check SD < sd_margin && abs(mean) < mean_margin
@@ -141,6 +167,9 @@ static inline bool exit_requested(void)
 static void do_wait_for_zero(void)
 {
     ESP_LOGI(TAG, "State: WAIT_FOR_ZERO (target=%.3f)", runtime_state.target_charge_weight);
+
+    // Set LED to not-ready colour (blue)
+    charge_mode_set_led(charge_mode_config.neopixel_not_ready_colour);
 
     // Clear events from previous cycle
     runtime_state.charge_mode_event = 0;
@@ -192,6 +221,9 @@ static void do_wait_for_zero(void)
 static void do_wait_for_complete(void)
 {
     ESP_LOGI(TAG, "State: WAIT_FOR_COMPLETE (target=%.3f)", runtime_state.target_charge_weight);
+
+    // Set LED to under-charge colour (yellow) at start of charging
+    charge_mode_set_led(charge_mode_config.neopixel_under_charge_colour);
 
     float target = runtime_state.target_charge_weight;
 
@@ -316,6 +348,9 @@ static void do_wait_for_complete(void)
     motor_enable(MOTOR_FINE, false);
     motor_enable(MOTOR_COARSE, false);
 
+    // Reset LED to default colours after charge complete
+    charge_mode_reset_led();
+
     if (!exit_requested()) {
         runtime_state.charge_mode_state = CHARGE_MODE_WAIT_FOR_CUP_REMOVAL;
     }
@@ -342,15 +377,18 @@ static void do_wait_for_cup_removal(void)
         if (error <= -charge_mode_config.fine_stop_threshold) {
             // Over charged
             runtime_state.charge_mode_event |= CHARGE_MODE_EVENT_OVER_CHARGE;
+            charge_mode_set_led(charge_mode_config.neopixel_over_charge_colour);
             ESP_LOGW(TAG, "OVER CHARGE: weight=%.4f, error=%.4f", final_weight, error);
         } else if (error >= charge_mode_config.fine_stop_threshold) {
             // Under charged
             runtime_state.charge_mode_event |= CHARGE_MODE_EVENT_UNDER_CHARGE;
+            charge_mode_set_led(charge_mode_config.neopixel_under_charge_colour);
             ESP_LOGW(TAG, "UNDER CHARGE: weight=%.4f, error=%.4f", final_weight, error);
         } else {
             // Normal
             runtime_state.charge_mode_event &= ~(CHARGE_MODE_EVENT_UNDER_CHARGE |
                                                    CHARGE_MODE_EVENT_OVER_CHARGE);
+            charge_mode_set_led(charge_mode_config.neopixel_normal_charge_colour);
             ESP_LOGI(TAG, "GOOD CHARGE: weight=%.4f, error=%.4f", final_weight, error);
         }
     }
@@ -398,6 +436,9 @@ static void do_wait_for_cup_return(void)
 {
     ESP_LOGI(TAG, "State: WAIT_FOR_CUP_RETURN");
 
+    // Set LED to not-ready colour (blue) while waiting for cup
+    charge_mode_set_led(charge_mode_config.neopixel_not_ready_colour);
+
     while (!exit_requested()) {
         TickType_t tick_start = xTaskGetTickCount();
 
@@ -415,6 +456,9 @@ static void do_wait_for_cup_return(void)
 
         vTaskDelayUntil(&tick_start, pdMS_TO_TICKS(20));
     }
+
+    // Reset LED to default colours
+    charge_mode_reset_led();
 
     if (!exit_requested()) {
         runtime_state.charge_mode_state = CHARGE_MODE_WAIT_FOR_ZERO;

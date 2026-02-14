@@ -48,4 +48,5 @@
 #define I2C_SCL   36
 
 // ====== NeoPixel ======
-#define NEOPIXEL  38
+#define NEOPIXEL      38   // Mini12864 backlight chain (RGB1 + RGB2 + backlight)
+#define NEOPIXEL_PWM3  9   // External PWM3 LED output (Pico GP28 -> ESP32 GPIO9)

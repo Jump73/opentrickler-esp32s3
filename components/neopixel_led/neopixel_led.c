@@ -1,5 +1,4 @@
 #include "neopixel_led.h"
-#include "charge_mode.h"  // For hex_string_to_decimal
 #include "esp_log.h"
 #include "nvs_flash.h"
 #include "nvs.h"
@@ -13,8 +12,9 @@ static const char *TAG = "NeoPixelLED";
 #define NVS_KEY_CONFIG "config"
 #define NEOPIXEL_DATA_REV 1
 
-// LED strip handle
-static led_strip_handle_t s_led_strip = NULL;
+// LED strip handles
+static led_strip_handle_t s_led_strip = NULL;      // Mini12864 backlight chain (GPIO38)
+static led_strip_handle_t s_pwm3_strip = NULL;      // External PWM3 LED chain (GPIO9)
 
 // Default configuration
 static neopixel_led_config_t neopixel_config = {
@@ -25,7 +25,7 @@ static neopixel_led_config_t neopixel_config = {
         .mini12864_backlight_colour = RGB_COLOUR_WHITE,
     },
     .pwm_out_led_chain_count = NEOPIXEL_LED_CHAIN_COUNT_1,
-    .pwm_out_led_colour_order = NEOPIXEL_COLOUR_ORDER_GRB,
+    .pwm_out_led_colour_order = NEOPIXEL_COLOUR_ORDER_RGB,  // Original default: RGB for external LEDs
     .pwm_out_led_is_rgbw = false,
 };
 
@@ -35,6 +35,19 @@ static void colour_to_rgb(uint32_t colour, uint8_t *r, uint8_t *g, uint8_t *b)
     *r = (colour >> 16) & 0xFF;
     *g = (colour >> 8)  & 0xFF;
     *b = colour & 0xFF;
+}
+
+// Helper: set pixel on a strip, respecting colour order config.
+// Mini12864 chain is always GRB (WS2812 native), PWM3 can be RGB or GRB.
+static void set_pixel_with_order(led_strip_handle_t strip, int index,
+                                  uint8_t r, uint8_t g, uint8_t b,
+                                  neopixel_colour_order_t order)
+{
+    if (order == NEOPIXEL_COLOUR_ORDER_GRB) {
+        led_strip_set_pixel(strip, index, g, r, b);
+    } else {
+        led_strip_set_pixel(strip, index, r, g, b);
+    }
 }
 
 esp_err_t neopixel_led_init(int gpio_num)
@@ -82,6 +95,43 @@ esp_err_t neopixel_led_init(int gpio_num)
     );
 
     return ret;
+}
+
+esp_err_t neopixel_pwm3_init(int gpio_num)
+{
+    int chain_count = (int)neopixel_config.pwm_out_led_chain_count;
+    if (chain_count < 1) chain_count = 1;
+
+    ESP_LOGI(TAG, "Initializing PWM3 external LED on GPIO%d (%d LEDs)", gpio_num, chain_count);
+
+    led_strip_config_t strip_config = {
+        .strip_gpio_num = gpio_num,
+        .max_leds = chain_count,
+        .led_pixel_format = LED_PIXEL_FORMAT_GRB,
+        .led_model = LED_MODEL_WS2812,
+    };
+    led_strip_rmt_config_t rmt_config = {
+        .resolution_hz = 10 * 1000 * 1000,
+    };
+
+    esp_err_t ret = led_strip_new_rmt_device(&strip_config, &rmt_config, &s_pwm3_strip);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to create PWM3 LED strip: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    ESP_LOGI(TAG, "PWM3 LED strip initialized on GPIO%d", gpio_num);
+
+    // Set initial colour mirroring led1 default
+    uint8_t r, g, b;
+    colour_to_rgb(neopixel_config.default_led_colours.led1_colour, &r, &g, &b);
+    for (int i = 0; i < chain_count; i++) {
+        set_pixel_with_order(s_pwm3_strip, i, r, g, b,
+                             neopixel_config.pwm_out_led_colour_order);
+    }
+    led_strip_refresh(s_pwm3_strip);
+
+    return ESP_OK;
 }
 
 esp_err_t neopixel_led_save_config(const neopixel_led_config_t *config)
@@ -164,18 +214,47 @@ esp_err_t neopixel_led_set_colour(uint32_t mini12864_backlight, uint32_t led1, u
 
     uint8_t r, g, b;
 
-    // Set all 3 backlight LEDs to the same color
-    colour_to_rgb(mini12864_backlight, &r, &g, &b);
-    for (int i = 0; i < NEOPIXEL_BACKLIGHT_COUNT; i++) {
-        led_strip_set_pixel(s_led_strip, i, r, g, b);
-    }
+    /*
+     * Mini12864 V2.0 NeoPixel chain order (matching original Pico W):
+     *   Pixel 0: Encoder RGB1 (led1) - status indicator
+     *   Pixel 1: Encoder RGB2 (led2) - status indicator
+     *   Pixel 2: 12864 Backlight
+     * External PWM3 LED is on a separate strip (s_pwm3_strip).
+     */
 
-    // Refresh to push data to the strip
+    // Note: led_strip_set_pixel params map directly to WS2812 GRB byte order,
+    // so we pass (green, red, blue) to get correct colours on the strip.
+
+    // Pixel 0: Encoder RGB1 (led1)
+    colour_to_rgb(led1, &r, &g, &b);
+    led_strip_set_pixel(s_led_strip, 0, g, r, b);
+
+    // Pixel 1: Encoder RGB2 (led2)
+    colour_to_rgb(led2, &r, &g, &b);
+    led_strip_set_pixel(s_led_strip, 1, g, r, b);
+
+    // Pixel 2: 12864 Backlight
+    colour_to_rgb(mini12864_backlight, &r, &g, &b);
+    led_strip_set_pixel(s_led_strip, 2, g, r, b);
+
+    // Refresh mini12864 strip
     esp_err_t ret = led_strip_refresh(s_led_strip);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "LED strip refresh failed: %s", esp_err_to_name(ret));
     } else {
-        ESP_LOGI(TAG, "Backlight set to #%06lx (R=%d G=%d B=%d)", mini12864_backlight, r, g, b);
+        ESP_LOGD(TAG, "LEDs: led1=#%06lx led2=#%06lx bl=#%06lx", led1, led2, mini12864_backlight);
+    }
+
+    // Mirror led1 colour to external PWM3 LED strip (if initialized)
+    if (s_pwm3_strip) {
+        colour_to_rgb(led1, &r, &g, &b);
+        int chain_count = (int)neopixel_config.pwm_out_led_chain_count;
+        if (chain_count < 1) chain_count = 1;
+        for (int i = 0; i < chain_count; i++) {
+            set_pixel_with_order(s_pwm3_strip, i, r, g, b,
+                                 neopixel_config.pwm_out_led_colour_order);
+        }
+        led_strip_refresh(s_pwm3_strip);
     }
 
     return ret;

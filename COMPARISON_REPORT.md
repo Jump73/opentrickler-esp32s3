@@ -236,7 +236,7 @@ This report compares the original OpenTrickler project (Raspberry Pi Pico W) wit
 | **Graphics Rendering** | ✅ u8g2 draw functions | ✅ LVGL rendering (I1→ST7567 page conversion) | ✅ **Complete** |
 | **Menu System (MUI)** | ✅ Full MUI integration | ✅ 12 LVGL screens with encoder navigation | ✅ **Complete** |
 | **Display Rotation** | ✅ Configurable (0/90/180/270°) | ❌ Not implemented | ❌ **Missing** |
-| **Backlight (NeoPixel)** | ✅ RGB backlight control | ✅ led_strip RMT driver on GPIO9 | ✅ **Complete** |
+| **Backlight (NeoPixel)** | ✅ RGB backlight control | ✅ led_strip RMT driver on GPIO38 | ✅ **Complete** |
 
 **Implementation Files:**
 - **Original:** `src/mini_12864_module.cpp`, `src/display.h`, `src/menu.cpp`
@@ -252,7 +252,7 @@ This report compares the original OpenTrickler project (Raspberry Pi Pico W) wit
 - ✅ Encoder integration as LVGL input device
 - ✅ Custom bitmap fonts for menu and weight display
 - ✅ Real-time weight/status display during charge mode
-- ✅ NeoPixel backlight via led_strip RMT driver
+- ✅ NeoPixel backlight via led_strip RMT driver (GPIO38: mini12864, GPIO9: external PWM3)
 
 **What's Missing:**
 - ❌ Display rotation configuration
@@ -294,9 +294,9 @@ This report compares the original OpenTrickler project (Raspberry Pi Pico W) wit
 | Feature | Original (Pico W) | ESP32-S3 Port | Status |
 |---------|-------------------|---------------|---------|
 | **NeoPixel Library** | ✅ PIO-based WS2812 driver | ✅ espressif/led_strip RMT driver | ✅ **Complete** |
-| **Display Backlight** | ✅ 3 LEDs in chain (Mini 12864) | ✅ 4 LEDs on GPIO9 via RMT | ✅ **Complete** |
-| **External LED (PWM3)** | ✅ Mirrors LED1 | ❌ Not implemented | ❌ **Missing** |
-| **Charge Mode Colors** | ✅ Dynamic color based on state | ✅ GREEN/YELLOW/RED/BLUE status colors | ✅ **Complete** |
+| **Display Backlight** | ✅ 3 LEDs in chain (Mini 12864) | ✅ 3 LEDs on GPIO38 via RMT (RGB1 + RGB2 + backlight) | ✅ **Complete** |
+| **External LED (PWM3)** | ✅ Mirrors LED1 via separate PIO | ✅ Separate led_strip on GPIO9, mirrors LED1 colour | ✅ **Complete** |
+| **Charge Mode Colors** | ✅ Dynamic color based on state | ✅ GREEN/YELLOW/RED/BLUE via neopixel_led_set_colour() | ✅ **Complete** |
 | **LED Configuration** | ✅ Chain count, RGBW, color order | ✅ Full config in NVS | ✅ **Complete** |
 
 **Implementation Files:**
@@ -305,13 +305,18 @@ This report compares the original OpenTrickler project (Raspberry Pi Pico W) wit
 
 **What Works:**
 - ✅ RMT-based WS2812B driver via espressif/led_strip v2.5.5
-- ✅ 10 MHz RMT resolution, GRB color order
-- ✅ `neopixel_led_set_colour()` API for real-time color updates
+- ✅ 10 MHz RMT resolution, GRB color order (with manual R↔G swap for correct WS2812 output)
+- ✅ Mini12864 chain on GPIO38: 3 pixels (Encoder RGB1, Encoder RGB2, Backlight)
+- ✅ External PWM3 LED on GPIO9: separate led_strip, mirrors LED1 colour automatically
+- ✅ Configurable PWM3 chain count and colour order (RGB/GRB) via NVS
+- ✅ `neopixel_led_set_colour()` API for real-time color updates (mini12864 + PWM3 mirror)
+- ✅ `neopixel_pwm3_init()` initializes external LED strip independently
 - ✅ NVS persistence for LED colors and configuration
 - ✅ LED configuration storage (colors, chain count, RGBW/RGB)
 - ✅ Color definitions and macros (GREEN, YELLOW, RED, BLUE, WHITE, DULL_WHITE)
 - ✅ URL-encoded hex color parsing
 - ✅ Initial backlight color set from NVS config on boot
+- ✅ Charge mode LED feedback: BLUE (not ready), YELLOW (under charge), RED (over charge), GREEN (normal)
 
 **What's Missing:**
 - ❌ External LED (PWM3) mirroring
@@ -498,7 +503,7 @@ This report compares the original OpenTrickler project (Raspberry Pi Pico W) wit
 | **/rest/cleanup_mode_state** | ✅ Manual trickler | ✅ Stub only | ⏳ **Partial** |
 | **/rest/profile_config** | ✅ Edit profiles | ✅ Fully implemented | ✅ **Complete** |
 | **/rest/profile_summary** | ✅ List profiles | ✅ Fully implemented | ✅ **Complete** |
-| **/rest/neopixel_led_config** | ✅ LED settings | ✅ Config only (no driver) | ⏳ **Partial** |
+| **/rest/neopixel_led_config** | ✅ LED settings | ✅ Config + driver (backlight + PWM3 mirror) | ✅ **Complete** |
 | **/rest/servo_gate_config** | ✅ Servo settings | ❌ Not implemented | ❌ **Missing** |
 | **/rest/servo_gate_state** | ✅ Open/close gate | ❌ Not implemented | ❌ **Missing** |
 | **/rest/button_control** | ✅ Simulate button press | ❌ Not implemented | ❌ **Missing** |
@@ -585,10 +590,10 @@ This report compares the original OpenTrickler project (Raspberry Pi Pico W) wit
    - Need: Real hardware testing for AND FXi, Steinberg SBS, USSolid, JM Science, Creedmoor, Radwag
    - Impact: Cannot confirm compatibility without physical scales
 
-5. ❌ **External LED (PWM3) Mirroring**
+5. ✅ **External LED (PWM3) Mirroring**
    - Location: `components/neopixel_led/`
-   - Need: Mirror LED1 output to external PWM3 LED
-   - Impact: No external LED status indicator
+   - Implemented: Separate led_strip on GPIO9 mirrors LED1 colour via `neopixel_pwm3_init()`
+   - Configurable chain count and colour order (RGB/GRB) via NVS
 
 ### 6.3 Medium Priority (Enhanced Functionality)
 
@@ -626,7 +631,7 @@ This report compares the original OpenTrickler project (Raspberry Pi Pico W) wit
 ### ✅ Fully Functional Components
 
 1. **LVGL Display + Menu System** - 12 screens with encoder navigation, per-digit weight input, real-time charge display
-2. **NeoPixel LED Driver** - RMT-based WS2812B via espressif/led_strip, charge mode color feedback
+2. **NeoPixel LED Driver** - RMT-based WS2812B via espressif/led_strip, charge mode color feedback, external PWM3 LED mirroring on GPIO9
 3. **Charge Mode with PID** - Full dispense cycle with profile-based PID control, precharge, over/under detection
 4. **Motor Control (MCPWM)** - Glitch-free variable-speed STEP generation, acceleration ramp, PID speed control
 5. **Motor Direction/Enable** - GPIO control with active-low enable (TMC2209), both motors operational
@@ -688,7 +693,7 @@ Reference mapping: `PICO_W-ESP32_S3_PICO_PIN_MAPPING.md`.
 | **TMC UART RX** | GPIO16 | Pin 7 (GP05) | ✅ Working (RX direct from PDN_UART) |
 | **Scale UART TX** | GPIO11 | Pin 1 (GP00) | ✅ Working (8N1) |
 | **Scale UART RX** | GPIO12 | Pin 2 (GP01) | ✅ Working |
-| **NeoPixel** | GPIO9 | Pin 34 (GP28) | ⏳ Assigned, not tested |
+| **NeoPixel PWM3** | GPIO9 | Pin 34 (GP28) | ✅ Working (external LED mirror) |
 | **Servo0 PWM** | GPIO8 | Pin 32 (GP27) | ⏳ Assigned |
 | **Servo1 PWM** | GPIO9 | Pin 34 (GP28) | ⏳ Assigned (conflicts NeoPixel) |
 | **EEPROM SDA** | GPIO7 | Pin 31 (GP26) | ⏳ Assigned |
@@ -793,7 +798,7 @@ The ESP32-S3 port has reached a functional state across all layers:
 - ✅ TMC2209 UART (separate TX/RX pins, both motors working)
 - ✅ Scale communication (GNG JJB + universal parser for 7 models)
 - ✅ Display: LVGL v9.2.2 with ST7567 driver (I1→page format conversion)
-- ✅ NeoPixel LED: RMT-based WS2812B via espressif/led_strip
+- ✅ NeoPixel LED: RMT-based WS2812B via espressif/led_strip (mini12864 GPIO38 + PWM3 GPIO9)
 - ✅ Encoder input with LVGL integration
 - ❌ Servo gate not implemented
 
