@@ -825,6 +825,9 @@
     <div class="modal-box">
         <h3 class="font-bold text-lg">Warning</h3>
         <p class="py-4">Over Throw!</p>
+        <div class="modal-action">
+            <form method="dialog"><button class="btn">OK</button></form>
+        </div>
     </div>
     <form method="dialog" class="modal-backdrop">
         <button>close</button>
@@ -835,6 +838,9 @@
     <div class="modal-box">
         <h3 class="font-bold text-lg">Warning</h3>
         <p class="py-4">Under Throw!</p>
+        <div class="modal-action">
+            <form method="dialog"><button class="btn">OK</button></form>
+        </div>
     </div>
     <form method="dialog" class="modal-backdrop">
         <button>close</button>
@@ -913,6 +919,11 @@
 
     var pollSetTimeoutId;
     var lastShownEvent = 0;
+    var eventDismissed = false;
+
+    // Allow user to dismiss over/under throw dialogs at any time
+    document.getElementById('overThrowDialog').addEventListener('close', function() { eventDismissed = true; });
+    document.getElementById('underThrowDialog').addEventListener('close', function() { eventDismissed = true; });
 
     // Set Charge Mode Set Point with REST interface
     function setChargeWeight() {
@@ -1123,9 +1134,15 @@
                 _setStartStopButtonWidget(true);
             }
 
-            // Process event - only show dialog once per new event
+            // Process event - show dialog once, allow dismiss at any time
             var hasEvent = (charge_mode_event & (ChargeModeEvent.UNDER_CHARGE | ChargeModeEvent.OVER_CHARGE)) != 0;
-            if (hasEvent && charge_mode_event != lastShownEvent) {
+            if (!hasEvent) {
+                // Events cleared (new cycle started) - reset tracking
+                lastShownEvent = 0;
+                eventDismissed = false;
+            }
+            else if (hasEvent && charge_mode_event != lastShownEvent && !eventDismissed) {
+                // New event detected and user hasn't dismissed it yet
                 lastShownEvent = charge_mode_event;
                 var dialog_name = null;
                 if (charge_mode_event & ChargeModeEvent.UNDER_CHARGE) {
@@ -1137,12 +1154,9 @@
 
                 // Show modal
                 const dialogModal = document.getElementById(dialog_name);
-                if (dialogModal) {
+                if (dialogModal && !dialogModal.open) {
                     dialogModal.showModal();
                 }
-            }
-            else if (!hasEvent) {
-                lastShownEvent = 0;
             }
         })
         .catch(error => {
