@@ -664,7 +664,7 @@ This report compares the original OpenTrickler project (Raspberry Pi Pico W) wit
 ### 🔧 GPIO Pin Mapping Status
 
 All pins are defined in `components/board_expansion/include/board_pins.h`.
-Reference mapping: `PIN_MAPPING_TABLE.txt` and `PICO_W-ESP32_S3_PICO_PIN_MAPPING.md`.
+Reference mapping: `PICO_W-ESP32_S3_PICO_PIN_MAPPING.md`.
 
 | Function | ESP32-S3 GPIO | Physical Pin | Status |
 |----------|--------------|--------------|---------|
