@@ -80,6 +80,9 @@ esp_err_t charge_mode_set_target_weight(float weight);
 esp_err_t charge_mode_set_state(charge_mode_state_t state);
 esp_err_t charge_mode_get_runtime_state(charge_mode_state_t_runtime *state);
 
+// Clear charge mode events (call after REST read, like original)
+void charge_mode_clear_events(void);
+
 // Utility function to convert hex string to uint32_t color
 uint32_t hex_string_to_decimal(const char *string);
 

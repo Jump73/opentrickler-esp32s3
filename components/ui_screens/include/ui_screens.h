@@ -14,6 +14,14 @@ void ui_screens_init(void);
 // Call periodically (e.g. every 50ms) with LVGL mutex held.
 void ui_screens_update(void);
 
+// Switch display to charge mode screen (e.g. when REST API starts charging).
+// Must be called with LVGL mutex held.
+void ui_screens_enter_charge(float target_weight);
+
+// Switch display back to main menu (e.g. when REST API exits charging).
+// Must be called with LVGL mutex held.
+void ui_screens_enter_main_menu(void);
+
 #ifdef __cplusplus
 }
 #endif

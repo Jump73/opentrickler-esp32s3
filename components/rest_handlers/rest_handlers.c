@@ -7,6 +7,8 @@
 #include "cleanup_mode.h"
 #include "neopixel_led.h"
 #include "system_control.h"
+#include "ui_screens.h"
+#include "lvgl_port.h"
 #include "esp_log.h"
 #include "esp_system.h"
 #include "freertos/FreeRTOS.h"
@@ -655,6 +657,16 @@ char* rest_charge_mode_state_handler(int num_params, char *params[], char *value
             charge_mode_state_t new_state = (charge_mode_state_t)atoi(values[idx]);
             charge_mode_set_state(new_state);
             runtime_state.charge_mode_state = new_state;
+
+            // Switch display to match charge mode state
+            if (lvgl_port_lock(100)) {
+                if (new_state == CHARGE_MODE_WAIT_FOR_ZERO) {
+                    ui_screens_enter_charge(runtime_state.target_charge_weight);
+                } else if (new_state == CHARGE_MODE_EXIT) {
+                    ui_screens_enter_main_menu();
+                }
+                lvgl_port_unlock();
+            }
         }
     }
 
@@ -683,6 +695,9 @@ char* rest_charge_mode_state_handler(int num_params, char *params[], char *value
              runtime_state.charge_mode_event,
              runtime_state.profile_name,
              elapsed_time_buffer);
+
+    // Clear events after reading (matches original RP2040 behaviour)
+    charge_mode_clear_events();
 
     return charge_mode_state_json_buffer;
 }

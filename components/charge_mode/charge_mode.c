@@ -348,8 +348,9 @@ static void do_wait_for_complete(void)
     motor_enable(MOTOR_FINE, false);
     motor_enable(MOTOR_COARSE, false);
 
-    // Reset LED to default colours after charge complete
-    charge_mode_reset_led();
+    // NOTE: Do NOT reset LED here - keep under_charge colour until
+    // do_wait_for_cup_removal() analyzes the result and sets the correct
+    // colour (over/under/normal). This matches the original RP2040 behaviour.
 
     if (!exit_requested()) {
         runtime_state.charge_mode_state = CHARGE_MODE_WAIT_FOR_CUP_REMOVAL;
@@ -368,8 +369,14 @@ static void do_wait_for_cup_removal(void)
     // Wait for scale to fully settle after motor stop
     vTaskDelay(pdMS_TO_TICKS(1000));
 
-    // Post-charge analysis
-    float final_weight = scale_get_measurement();
+    // Post-charge analysis - use blocking measurement for reliability
+    // (scale_get_measurement can return NaN if measurement_valid is false)
+    float final_weight;
+    if (!scale_block_wait_for_measurement(500, &final_weight)) {
+        // Fallback to non-blocking read
+        final_weight = scale_get_measurement();
+    }
+
     if (!isnanf(final_weight)) {
         runtime_state.current_weight = final_weight;
         float error = runtime_state.target_charge_weight - final_weight;
@@ -391,6 +398,8 @@ static void do_wait_for_cup_removal(void)
             charge_mode_set_led(charge_mode_config.neopixel_normal_charge_colour);
             ESP_LOGI(TAG, "GOOD CHARGE: weight=%.4f, error=%.4f", final_weight, error);
         }
+    } else {
+        ESP_LOGW(TAG, "Could not get valid weight for post-charge analysis");
     }
 
     // Wait for cup removal: 5 stable readings, mean very negative
@@ -422,6 +431,9 @@ static void do_wait_for_cup_removal(void)
 
         vTaskDelayUntil(&tick_start, pdMS_TO_TICKS(300));
     }
+
+    // Reset LED to default colours after cup removed (matches original)
+    charge_mode_reset_led();
 
     if (!exit_requested()) {
         runtime_state.charge_mode_state = CHARGE_MODE_WAIT_FOR_CUP_RETURN;
@@ -615,6 +627,11 @@ esp_err_t charge_mode_get_runtime_state(charge_mode_state_t_runtime *state)
     if (!state) return ESP_ERR_INVALID_ARG;
     *state = runtime_state;
     return ESP_OK;
+}
+
+void charge_mode_clear_events(void)
+{
+    runtime_state.charge_mode_event = 0;
 }
 
 uint32_t hex_string_to_decimal(const char *string)

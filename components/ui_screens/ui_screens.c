@@ -367,6 +367,34 @@ static void evt_exit_charge(lv_event_t *e)
     ESP_LOGI(TAG, "Charge exited -> Main");
 }
 
+void ui_screens_enter_charge(float target_weight)
+{
+    if (!s_scr_charge) return;
+
+    // Update target label (same logic as evt_start_charging)
+    static char tgt_buf[24];
+    charge_mode_config_t cfg;
+    if (charge_mode_get_config(&cfg) == ESP_OK && cfg.decimal_places == DP_3) {
+        snprintf(tgt_buf, sizeof(tgt_buf), "Target: %.3f", target_weight);
+    } else {
+        snprintf(tgt_buf, sizeof(tgt_buf), "Target: %.2f", target_weight);
+    }
+    lv_label_set_text(s_lbl_charge_target, tgt_buf);
+    lv_label_set_text(s_lbl_charge_result, "");
+
+    switch_to_screen(SCR_CHARGE_MODE, s_scr_charge);
+    group_add_children(s_scr_charge);
+    ESP_LOGI(TAG, "REST -> Charge Mode screen (target=%.2f)", target_weight);
+}
+
+void ui_screens_enter_main_menu(void)
+{
+    if (!s_scr_main_menu) return;
+    switch_to_screen(SCR_MAIN_MENU, s_scr_main_menu);
+    group_add_children(s_scr_main_menu);
+    ESP_LOGI(TAG, "REST -> Main Menu screen");
+}
+
 // --- Cleanup mode ---
 static void evt_stop_cleanup(lv_event_t *e)
 {

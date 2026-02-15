@@ -221,13 +221,15 @@ static void scale_task(void *pvParameters)
 
     while (1) {
         if (scale_config.scale_driver == SCALE_DRIVER_GNG_JJB) {
-            // G&G JJB: polling mode - request weight every ~250ms
+            // G&G JJB: polling mode - request weight every ~100ms (~10 SPS)
+            // Original was ~250ms (~4 SPS). Faster polling improves PID response.
+            // 14-byte frame @ 9600 baud takes ~15ms, 50ms timeout gives 3x margin.
             scale_write("!p\r\n", 4);
             while (uart_read_bytes(SCALE_UART_NUM, &rx_byte, 1,
-                                   pdMS_TO_TICKS(100)) > 0) {
+                                   pdMS_TO_TICKS(50)) > 0) {
                 process_rx_byte(rx_byte);
             }
-            vTaskDelay(pdMS_TO_TICKS(150));
+            vTaskDelay(pdMS_TO_TICKS(30));
         } else {
             // Other drivers: continuous output, read bytes as they arrive
             if (uart_read_bytes(SCALE_UART_NUM, &rx_byte, 1,
