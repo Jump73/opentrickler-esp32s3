@@ -21,7 +21,7 @@ if ($LASTEXITCODE -ne 0) {
 
 # Flash using esptool directly
 Write-Host "`nFlashing to COM6..." -ForegroundColor Yellow
-python -m esptool --chip esp32s3 --port COM6 -b 460800 --before default_reset --after hard_reset write_flash --flash_mode dio --flash_size 2MB --flash_freq 80m 0x0 build\bootloader\bootloader.bin 0x8000 build\partition_table\partition-table.bin 0x10000 build\ot_esp32s3_tmp.bin
+python -m esptool --chip esp32s3 --port COM6 -b 460800 --before default_reset --after hard_reset write_flash --flash_mode dio --flash_size 2MB --flash_freq 80m 0x0 build\bootloader\bootloader.bin 0x8000 build\partition_table\partition-table.bin 0x10000 build\opentrickler_esp32s3.bin
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host "`nFlash FAILED! Check if ESP32 is connected to COM6." -ForegroundColor Red
@@ -43,7 +43,7 @@ Write-Host "Available pages:" -ForegroundColor Cyan
 Write-Host "  http://192.168.4.1/         - Main web portal" -ForegroundColor White
 Write-Host "  http://192.168.4.1/wizard   - Setup wizard" -ForegroundColor White
 Write-Host "  http://192.168.4.1/mobile   - Mobile view" -ForegroundColor White
-Write-Host "  http://192.168.4.1/rest/test - REST API test" -ForegroundColor White
+Write-Host "  http://192.168.4.1/display_mirror - Display mirror" -ForegroundColor White
 Write-Host ""
 Write-Host "Starting monitor..." -ForegroundColor Yellow
 Write-Host ""

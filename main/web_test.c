@@ -26,7 +26,7 @@
 #include "generated/wizard.html.h"
 #include "generated/display_mirror.html.h"
 
-static const char *TAG = "WebTest";
+static const char *TAG = "OpenTrickler";
 
 // ST7567 display instance
 static st7567_t s_lcd;
@@ -42,19 +42,6 @@ static void ui_update_task(void *arg)
         }
         vTaskDelay(pdMS_TO_TICKS(10));  // 100 Hz update rate
     }
-}
-
-// Example REST handler - returns JSON (without HTTP headers)
-static char* rest_test_handler(int num_params, char *params[], char *values[])
-{
-    ESP_LOGI(TAG, "REST handler called with %d params", num_params);
-    for (int i = 0; i < num_params; i++) {
-        ESP_LOGI(TAG, "  Param %d: %s = %s", i, params[i], values[i]);
-    }
-
-    // Return JSON only (http_server_ot adds HTTP headers automatically)
-    static char response[] = "{\"status\":\"ok\",\"device\":\"OpenTrickler-ESP32S3\"}";
-    return response;
 }
 
 // Smart root handler - returns wizard in AP mode, portal in STA mode
@@ -76,12 +63,9 @@ void app_main(void)
 {
     ESP_LOGI(TAG, "");
     ESP_LOGI(TAG, "========================================");
-    ESP_LOGI(TAG, "=== OpenTrickler ESP32-S3 Web UI Test ===");
+    ESP_LOGI(TAG, "=== OpenTrickler ESP32-S3 Controller ===");
     ESP_LOGI(TAG, "========================================");
     ESP_LOGI(TAG, "");
-
-    // Small delay to let serial monitor connect
-    vTaskDelay(pdMS_TO_TICKS(1000));
 
     ESP_LOGI(TAG, "Step 1: Initializing WiFi...");
     esp_err_t ret = wifi_manager_init();
@@ -155,10 +139,6 @@ void app_main(void)
         // Wake display from power-save (init ends with display OFF per u8g2 convention)
         st7567_power_save(&s_lcd, false);
 
-        // Diagnostic: send test pattern to verify SPI communication
-        ESP_LOGI(TAG, "  Sending test pattern to verify SPI...");
-        st7567_fill_test_pattern(&s_lcd);
-        vTaskDelay(pdMS_TO_TICKS(2000));  // Show test pattern for 2 seconds
     }
 
     // Step 9: NeoPixel backlight (GPIO38, separate from LCD_RST=GPIO5)
@@ -232,7 +212,6 @@ void app_main(void)
 
     // Register REST endpoints
     ESP_LOGI(TAG, "Step 15: Registering REST endpoints...");
-    http_server_register_rest_handler("/rest/test", rest_test_handler);
     http_server_register_rest_handler("/rest/wireless_config", rest_wireless_config_handler);
     http_server_register_rest_handler("/rest/system_control", rest_system_control_handler);
     http_server_register_rest_handler("/rest/coarse_motor_config", rest_coarse_motor_config_handler);

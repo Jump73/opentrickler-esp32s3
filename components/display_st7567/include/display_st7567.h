@@ -43,5 +43,3 @@ esp_err_t st7567_power_save(st7567_t *d, bool on);
 // Set display contrast (0-63)
 esp_err_t st7567_set_contrast(st7567_t *d, uint8_t contrast);
 
-// Fill display with test pattern
-esp_err_t st7567_fill_test_pattern(st7567_t *d);

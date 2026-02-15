@@ -192,25 +192,3 @@ esp_err_t st7567_set_contrast(st7567_t *d, uint8_t contrast)
     ESP_ERROR_CHECK(st7567_cmd(d, contrast));
     return ESP_OK;
 }
-
-esp_err_t st7567_fill_test_pattern(st7567_t *d)
-{
-    if (!d) return ESP_ERR_INVALID_ARG;
-    uint8_t line[ST7567_WIDTH];
-    // Left half: all pixels ON (bright), right half: all pixels OFF (dark)
-    // This makes polarity visually obvious
-    for (int i = 0; i < ST7567_WIDTH; i++) {
-        line[i] = (i < 64) ? 0xFF : 0x00;
-    }
-    // Half-swap for UC1701 dual-scan LCD panel
-    for (int p = 0; p < ST7567_PAGES; p++) {
-        // Left half (cols 0-63) → display cols 64-127 (physical LEFT)
-        ESP_ERROR_CHECK(st7567_set_page_col(d, (uint8_t)p, 64));
-        ESP_ERROR_CHECK(st7567_write(d, &line[0], 64));
-        // Right half (cols 64-127) → display cols 0-63 (physical RIGHT)
-        ESP_ERROR_CHECK(st7567_set_page_col(d, (uint8_t)p, 0));
-        ESP_ERROR_CHECK(st7567_write(d, &line[64], 64));
-    }
-    ESP_LOGI(TAG, "test pattern: left=bright, right=dark");
-    return ESP_OK;
-}
