@@ -1,6 +1,6 @@
 # OpenTrickler ESP32-S3 Port - Comprehensive Comparison Report
 
-**Report Date:** 2026-02-13 (Updated)
+**Report Date:** 2026-02-15 (Updated)
 **Original Project Location:** `C:\Users\kdzia\OpenTrickler_org-EAMARS`
 **ESP32-S3 Port Location:** `C:\Users\kdzia\ESPRESS\opentrickler-esp32s3`
 
@@ -54,7 +54,7 @@ The port follows these specific implementation requirements:
 
 This report compares the original OpenTrickler project (Raspberry Pi Pico W) with the ESP32-S3 port, documenting what functionality exists, what's complete, what's partially implemented, and what's missing.
 
-**Estimated Completion:** ~75-80% of original functionality ported. Major milestones since last report: **LVGL display with full 12-screen menu system**, **NeoPixel LED driver (RMT/led_strip)**, **PID-based charge mode**, and **cleanup mode with motor control**. Both motors operate correctly with MCPWM + acceleration ramp + PID control from profile parameters. GNG JJB scale reads weight, universal line parser handles multiple scale formats. TMC2209 UART uses separate TX/RX pins (GPIO15/GPIO16) - both motors work, further testing needed to verify full UART register access.
+**Estimated Completion:** ~80-85% of original functionality ported. Major milestones since last report: **Web UI charge mode control with display sync**, **scale tare reliability fix (queued action pattern)**, **faster G&G JJB polling (~20ms cycle vs original 250ms)**, **charge result feedback synchronized across LED, display, and web UI**, and **embedded HTML regeneration pipeline fixed**. Both motors operate correctly with MCPWM + acceleration ramp + PID control from profile parameters. GNG JJB scale reads weight with optimized polling (no artificial delay, frame-driven timing). TMC2209 UART uses separate TX/RX pins (GPIO15/GPIO16) - both motors work, further testing needed to verify full UART register access.
 
 ---
 
@@ -210,7 +210,8 @@ This report compares the original OpenTrickler project (Raspberry Pi Pico W) wit
 
 **What Works:**
 - ✅ Scale configuration storage (driver type, baudrate)
-- ✅ GNG JJB scale driver: UART polling mode (`!p\r\n`), weight parsing, tare/calibration commands
+- ✅ GNG JJB scale driver: optimized polling mode (`!p\r\n`), frame-driven timing (~20ms cycle, no artificial delay)
+- ✅ Tare command (`!t`) queued via `pending_action` and executed from scale_task (avoids UART collision with polling)
 - ✅ Universal line-based parser (`scale_line_feed()`) handles sign+spaces format across multiple scale types
 - ✅ Frame structures defined for: AND FXi (17B), Steinberg SBS (16B), GNG JJB (14B), US Solid (15B), Creedmoor (14B), Radwag PS-R2 (21B), JM Science (19B)
 - ✅ Continuous read mode for non-GNG scales (polling only for GNG JJB)
@@ -218,6 +219,7 @@ This report compares the original OpenTrickler project (Raspberry Pi Pico W) wit
 - ✅ Blocking `scale_block_wait_for_measurement()` with semaphore synchronization
 - ✅ Scale UART fix: changed from 7N1 to 8N1 frame format
 - ✅ Generic scale simulator (for testing)
+- ✅ Timeout handling: UART flush + line buffer reset on missed frame
 
 **What's Missing:**
 - ❌ Sartorius frame structure and parser
@@ -318,9 +320,6 @@ This report compares the original OpenTrickler project (Raspberry Pi Pico W) wit
 - ✅ Initial backlight color set from NVS config on boot
 - ✅ Charge mode LED feedback: BLUE (not ready), YELLOW (under charge), RED (over charge), GREEN (normal)
 
-**What's Missing:**
-- ❌ External LED (PWM3) mirroring
-
 ---
 
 ### 2.6 Servo Gate Control
@@ -374,11 +373,14 @@ This report compares the original OpenTrickler project (Raspberry Pi Pico W) wit
 - ✅ Ring buffer stability detection: 10 samples for zero, 5 samples for cup removal
 - ✅ Statistical analysis: SD and mean calculation for stability
 - ✅ Precharge: configurable time_ms and speed_rps after charge complete
-- ✅ Over/under charge detection with event flags
+- ✅ Over/under charge detection with event flags and continuous LED/event updates during cup removal
+- ✅ Cup lifting detection: suppress UNDER CHARGE flash when weight < 50% target (cup being removed)
 - ✅ Elapsed time tracking
 - ✅ Configuration storage in NVS (thresholds, colors, decimal places, precharge)
 - ✅ LVGL charge mode screen with real-time weight and timer display
+- ✅ Display auto-switches to charge screen when started from web UI (LVGL mutex protected)
 - ✅ LED status feedback via NeoPixel (GREEN=normal, YELLOW=under, RED=over, BLUE=not ready)
+- ✅ LED/display/web UI all use same threshold (`fine_stop_threshold`) for over/under classification
 - ✅ FreeRTOS task (4096 stack, priority 8)
 
 ---
@@ -495,11 +497,11 @@ This report compares the original OpenTrickler project (Raspberry Pi Pico W) wit
 | **/rest/wireless_config** | ✅ WiFi settings | ✅ Fully implemented | ✅ **Complete** |
 | **/rest/system_control** | ✅ Reboot, save, erase NVS | ✅ Fully implemented | ✅ **Complete** |
 | **/rest/scale_config** | ✅ Scale driver settings | ✅ Config only (no driver) | ⏳ **Partial** |
-| **/rest/scale_action** | ✅ Tare, calibrate commands | ✅ Stub only | ⏳ **Partial** |
+| **/rest/scale_action** | ✅ Tare, calibrate commands | ✅ Queued action (tare via pending_action) | ✅ **Complete** |
 | **/rest/coarse_motor_config** | ✅ Motor settings | ✅ Config only | ⏳ **Partial** |
 | **/rest/fine_motor_config** | ✅ Motor settings | ✅ Config only | ⏳ **Partial** |
 | **/rest/charge_mode_config** | ✅ Charge settings | ✅ Config only | ⏳ **Partial** |
-| **/rest/charge_mode_state** | ✅ Start/stop charging | ✅ Stub only | ⏳ **Partial** |
+| **/rest/charge_mode_state** | ✅ Start/stop charging | ✅ Full control + display sync (LVGL mutex) | ✅ **Complete** |
 | **/rest/cleanup_mode_state** | ✅ Manual trickler | ✅ Stub only | ⏳ **Partial** |
 | **/rest/profile_config** | ✅ Edit profiles | ✅ Fully implemented | ✅ **Complete** |
 | **/rest/profile_summary** | ✅ List profiles | ✅ Fully implemented | ✅ **Complete** |
@@ -520,15 +522,20 @@ This report compares the original OpenTrickler project (Raspberry Pi Pico W) wit
 
 | Page | Original | ESP32-S3 | Status |
 |------|----------|----------|---------|
-| **Web Portal** | ✅ Full SPA with controls | ✅ HTML embedded | ✅ **Complete** |
+| **Web Portal** | ✅ Full SPA with controls | ✅ HTML embedded, inline charge result banner | ✅ **Complete** |
 | **Setup Wizard** | ✅ WiFi + initial setup | ✅ HTML embedded | ✅ **Complete** |
 | **Display Mirror** | ✅ Live LCD view in browser | ✅ HTML only (no backend) | ⏳ **Partial** |
 
 **Implementation Files:**
 - **Original:** HTML in `resources/`, embedded via build script
-- **ESP32-S3:** `html/` → `main/generated/*.html.h`
+- **ESP32-S3:** `html/` → `main/generated/*.html.h` (via `scripts/html2header.py`)
 
-**Status:** HTML pages are ported and served, but backend integration incomplete.
+**Status:** HTML pages are ported and served. Web portal has full charge mode control with inline over/under charge banner (auto-hides on cup removal), scale tare button, and real-time weight display.
+
+**Important:** After editing `html/*.html`, must regenerate headers:
+```
+python scripts/html2header.py -f html/web_portal.html -o main/generated/web_portal.html.h --no-minify
+```
 
 ---
 
@@ -632,19 +639,20 @@ This report compares the original OpenTrickler project (Raspberry Pi Pico W) wit
 
 1. **LVGL Display + Menu System** - 12 screens with encoder navigation, per-digit weight input, real-time charge display
 2. **NeoPixel LED Driver** - RMT-based WS2812B via espressif/led_strip, charge mode color feedback, external PWM3 LED mirroring on GPIO9
-3. **Charge Mode with PID** - Full dispense cycle with profile-based PID control, precharge, over/under detection
+3. **Charge Mode with PID** - Full dispense cycle with profile-based PID control, precharge, over/under detection, synchronized feedback across LED/display/web UI
 4. **Motor Control (MCPWM)** - Glitch-free variable-speed STEP generation, acceleration ramp, PID speed control
 5. **Motor Direction/Enable** - GPIO control with active-low enable (TMC2209), both motors operational
-6. **GNG JJB Scale** - UART polling mode, weight parsing, blocking measurement with semaphore
+6. **GNG JJB Scale** - Optimized UART polling (~20ms cycle, frame-driven), reliable tare (queued action), blocking measurement with semaphore
 7. **Cleanup Mode** - Manual trickler with encoder speed control, reverse support, LVGL screen
 8. **WiFi Management** - STA + AP modes with auto-start logic
 9. **HTTP Server** - Serves web pages and REST API
 10. **NVS Configuration Storage** - All config modules save/load correctly (CONFIG_VERSION tracked)
 11. **Profile System** - 8 profiles with PID parameters, full CRUD via REST API
 12. **System Control** - Reboot, save all settings, erase NVS
-13. **Web UI Pages** - Portal, wizard, and display mirror HTML served
-14. **REST API Endpoints** - All endpoints registered and parse parameters
+13. **Web UI Pages** - Portal with charge mode control and inline result banner, wizard, display mirror HTML
+14. **REST API Endpoints** - All endpoints registered and parse parameters; charge mode state controls display via LVGL mutex
 15. **Input Encoder** - Quadrature decoding, detent detection, button debounce, LVGL integration
+16. **Web UI ↔ Display Sync** - Starting charge from web UI switches physical display to charge screen; over/under banner auto-hides on cup removal
 
 ### ⏳ Partially Working / Needs Testing
 
@@ -656,11 +664,11 @@ This report compares the original OpenTrickler project (Raspberry Pi Pico W) wit
 
 1. **Servo Gate** - No component implementation (pin definitions exist)
 2. **Sartorius Scale** - No frame structure or parser
-3. **External LED (PWM3)** - No mirroring of LED1
-4. **Display Rotation** - Not configurable
-5. **ESP Provisioning** - No BLE/SoftAP provisioning (web wizard works as alternative)
-6. **Button REST Override** - Cannot simulate button presses via REST API
-7. **Reset Button** - GPIO37 not handled
+3. **Display Rotation** - Not configurable
+4. **ESP Provisioning** - No BLE/SoftAP provisioning (web wizard works as alternative)
+5. **Button REST Override** - Cannot simulate button presses via REST API
+6. **Reset Button** - GPIO37 not handled
+7. **Display Buffer Mirroring** - HTML page served but backend framebuffer export not implemented
 
 ---
 
@@ -809,7 +817,7 @@ The ESP32-S3 port has reached a functional state across all layers:
 - ✅ Per-digit weight input, over/under charge detection, precharge
 - ✅ LED status feedback (color indicates charge state)
 
-**Estimated Completion:** ~75-80% of original functionality ported. The project can physically dispense powder with PID-controlled motors, display real-time weight on the LCD, provide LED feedback, and navigate all settings via the encoder menu. Remaining work: servo gate, Sartorius scale, TMC UART verification, and minor features (display rotation, REST button override, ESP provisioning).
+**Estimated Completion:** ~80-85% of original functionality ported. The project can physically dispense powder with PID-controlled motors, display real-time weight on the LCD, provide synchronized LED/display/web UI feedback, and be fully controlled from both the encoder menu and web UI. Scale polling is optimized for faster PID response (~20ms vs original 250ms). Remaining work: servo gate, Sartorius scale, TMC UART verification, and minor features (display rotation, REST button override, ESP provisioning).
 
 ---
 
@@ -826,6 +834,10 @@ The ESP32-S3 port has reached a functional state across all layers:
 - LVGL uses `LV_COLOR_FORMAT_I1` (monochrome) matching ST7567 controller
 - Display buffer conversion: LVGL horizontal bit order → ST7567 vertical page format
 - Charge mode PID uses profile parameters loaded from NVS (2 presets: AR2208, AR2209 + 6 custom slots)
+- HTML→C header pipeline: edit `html/*.html`, run `python scripts/html2header.py`, rebuild firmware
+- G&G JJB scale polling: frame-driven (~20ms cycle), tare via queued `pending_action` to avoid UART collision
+- Over/under charge feedback uses `fine_stop_threshold` from config consistently across LED, display, and web UI
+- Cup removal: suppress UNDER CHARGE flash when weight < 50% target (cup being lifted)
 
 ---
 
@@ -880,4 +892,4 @@ static void _enable_uart_rx(uart_inst_t *uart, bool state) {
 - `components/board_expansion/include/board_pins.h` - Pin definitions (TX=GPIO15, RX=GPIO16)
 - `PICO_W-ESP32_S3_PICO_PIN_MAPPING.md` - Detailed pin-to-pin mapping
 
-**Last Updated:** 2026-02-13
+**Last Updated:** 2026-02-15
