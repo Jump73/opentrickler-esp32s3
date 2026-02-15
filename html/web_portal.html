@@ -968,6 +968,15 @@
         const chargeModeStateRemoveCup = document.getElementById("chargeModeStateRemoveCup");
         const chargeModeStateReturnCup = document.getElementById("chargeModeStateReturnCup");
 
+        // Hide charge result banner whenever we leave REMOVE_CUP state
+        if (state != ChargeModeState.REMOVE_CUP) {
+            var banner = document.getElementById("chargeResultBanner");
+            if (banner && !banner.classList.contains("hidden")) {
+                banner.className = "alert hidden text-center font-bold text-lg justify-center";
+                document.getElementById("chargeResultText").textContent = "";
+            }
+        }
+
         switch (state) {
             case ChargeModeState.WAIT:
                 chargeModeStateWait.classList.add(PRIMARY_CLASS);
@@ -1083,7 +1092,8 @@
             return response.json()
         })
         .then(data => {
-            // console.log(data);
+            // Debug: log state transitions around cup removal
+            if (data["s2"] >= 3) console.log("poll:", JSON.stringify(data));
             // Parse data
             const charge_weight_set_point = data["s0"];
             const current_charge_weight = data["s1"];
@@ -1151,6 +1161,9 @@
             console.error("Error reading charge mode settings");
             _setCurrentWeight("---", 0);
             _setChargeModeStateWidget(ChargeModeState.WAIT);
+            // Hide banner on error too
+            document.getElementById("chargeResultBanner").className = "alert hidden text-center font-bold text-lg justify-center";
+            document.getElementById("chargeResultText").textContent = "";
         })
         .finally(() => {
             // Schedule the next event
