@@ -63,6 +63,11 @@
                         <li id="chargeModeStateReturnCup" class="step">Return Cup</li>
                     </ul>
 
+                    <!-- Charge result (mirrors display) -->
+                    <div id="chargeResultBanner" class="alert hidden text-center font-bold text-lg justify-center">
+                        <span id="chargeResultText"></span>
+                    </div>
+
                     <!-- Row 3 -->
                     <input id="chargeWeightInput" type="number" step="0.001" placeholder="Charge Weight" class="input input-bordered input-primary" pattern="[0-9]+([\.,][0-9]+)?"/>
 
@@ -921,6 +926,18 @@
     var lastShownEvent = 0;
     var eventDismissed = false;
 
+    // Load fine_stop_threshold from charge mode config (used for over/under display)
+    window._fineStopThreshold = 0.03;  // fallback default
+    fetch("/rest/charge_mode_config")
+        .then(r => r.json())
+        .then(data => {
+            if (data && data.c6 !== undefined) {
+                window._fineStopThreshold = parseFloat(data.c6);
+                console.log("Loaded fine_stop_threshold:", window._fineStopThreshold);
+            }
+        })
+        .catch(() => {});
+
     // Allow user to dismiss over/under throw dialogs at any time
     document.getElementById('overThrowDialog').addEventListener('close', function() { eventDismissed = true; });
     document.getElementById('underThrowDialog').addEventListener('close', function() { eventDismissed = true; });
@@ -1134,29 +1151,30 @@
                 _setStartStopButtonWidget(true);
             }
 
-            // Process event - show dialog once, allow dismiss at any time
-            var hasEvent = (charge_mode_event & (ChargeModeEvent.UNDER_CHARGE | ChargeModeEvent.OVER_CHARGE)) != 0;
-            if (!hasEvent) {
-                // Events cleared (new cycle started) - reset tracking
-                lastShownEvent = 0;
-                eventDismissed = false;
-            }
-            else if (hasEvent && charge_mode_event != lastShownEvent && !eventDismissed) {
-                // New event detected and user hasn't dismissed it yet
-                lastShownEvent = charge_mode_event;
-                var dialog_name = null;
-                if (charge_mode_event & ChargeModeEvent.UNDER_CHARGE) {
-                    dialog_name = "underThrowDialog";
+            // Inline charge result banner (mirrors display behaviour).
+            // Show over/under/ok only during REMOVE_CUP state, clear otherwise.
+            var banner = document.getElementById("chargeResultBanner");
+            var resultText = document.getElementById("chargeResultText");
+            if (charge_mode_state == ChargeModeState.REMOVE_CUP &&
+                charge_weight_set_point > 0 &&
+                typeof current_charge_weight === 'number' && !isNaN(current_charge_weight)) {
+                var error = charge_weight_set_point - current_charge_weight;
+                // Use fine_stop_threshold logic (same as display and LED).
+                // We approximate using the threshold from the REST config (loaded at startup).
+                var threshold = window._fineStopThreshold || 0.03;
+                if (error <= -threshold) {
+                    resultText.textContent = "OVER CHARGE";
+                    banner.className = "alert alert-error text-center font-bold text-lg justify-center";
+                } else if (error >= threshold) {
+                    resultText.textContent = "UNDER CHARGE";
+                    banner.className = "alert alert-warning text-center font-bold text-lg justify-center";
+                } else {
+                    resultText.textContent = "OK";
+                    banner.className = "alert alert-success text-center font-bold text-lg justify-center";
                 }
-                else if (charge_mode_event & ChargeModeEvent.OVER_CHARGE) {
-                    dialog_name = "overThrowDialog";
-                }
-
-                // Show modal
-                const dialogModal = document.getElementById(dialog_name);
-                if (dialogModal && !dialogModal.open) {
-                    dialogModal.showModal();
-                }
+            } else {
+                banner.className = "alert hidden text-center font-bold text-lg justify-center";
+                resultText.textContent = "";
             }
         })
         .catch(error => {

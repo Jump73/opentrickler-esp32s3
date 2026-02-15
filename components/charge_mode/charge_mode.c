@@ -369,42 +369,12 @@ static void do_wait_for_cup_removal(void)
     // Wait for scale to fully settle after motor stop
     vTaskDelay(pdMS_TO_TICKS(1000));
 
-    // Post-charge analysis - use blocking measurement for reliability
-    // (scale_get_measurement can return NaN if measurement_valid is false)
-    float final_weight;
-    if (!scale_block_wait_for_measurement(500, &final_weight)) {
-        // Fallback to non-blocking read
-        final_weight = scale_get_measurement();
-    }
-
-    if (!isnanf(final_weight)) {
-        runtime_state.current_weight = final_weight;
-        float error = runtime_state.target_charge_weight - final_weight;
-
-        if (error <= -charge_mode_config.fine_stop_threshold) {
-            // Over charged
-            runtime_state.charge_mode_event |= CHARGE_MODE_EVENT_OVER_CHARGE;
-            charge_mode_set_led(charge_mode_config.neopixel_over_charge_colour);
-            ESP_LOGW(TAG, "OVER CHARGE: weight=%.4f, error=%.4f", final_weight, error);
-        } else if (error >= charge_mode_config.fine_stop_threshold) {
-            // Under charged
-            runtime_state.charge_mode_event |= CHARGE_MODE_EVENT_UNDER_CHARGE;
-            charge_mode_set_led(charge_mode_config.neopixel_under_charge_colour);
-            ESP_LOGW(TAG, "UNDER CHARGE: weight=%.4f, error=%.4f", final_weight, error);
-        } else {
-            // Normal
-            runtime_state.charge_mode_event &= ~(CHARGE_MODE_EVENT_UNDER_CHARGE |
-                                                   CHARGE_MODE_EVENT_OVER_CHARGE);
-            charge_mode_set_led(charge_mode_config.neopixel_normal_charge_colour);
-            ESP_LOGI(TAG, "GOOD CHARGE: weight=%.4f, error=%.4f", final_weight, error);
-        }
-    } else {
-        ESP_LOGW(TAG, "Could not get valid weight for post-charge analysis");
-    }
-
-    // Wait for cup removal: 5 stable readings, mean very negative
+    // Wait for cup removal: continuously update weight, LED and events.
+    // LED and events are re-evaluated with every measurement so they stay
+    // in sync with the display (which also reads runtime_state.current_weight).
     ring_buf_t data_buffer;
     ring_buf_init(&data_buffer, 5);
+    uint32_t last_led_state = 0;  // track to avoid redundant LED updates
 
     while (!exit_requested()) {
         TickType_t tick_start = xTaskGetTickCount();
@@ -415,6 +385,43 @@ static void do_wait_for_cup_removal(void)
         }
         runtime_state.current_weight = measurement;
         ring_buf_push(&data_buffer, measurement);
+
+        // Continuously update LED and event based on latest weight.
+        // Powder may still settle after motors stop, so the classification
+        // can change from OK to OVER CHARGE as weight increases.
+        float error = runtime_state.target_charge_weight - measurement;
+        uint32_t new_led_colour;
+        uint32_t new_event;
+
+        if (error <= -charge_mode_config.fine_stop_threshold) {
+            new_event = CHARGE_MODE_EVENT_OVER_CHARGE;
+            new_led_colour = charge_mode_config.neopixel_over_charge_colour;
+        } else if (error >= charge_mode_config.fine_stop_threshold) {
+            new_event = CHARGE_MODE_EVENT_UNDER_CHARGE;
+            new_led_colour = charge_mode_config.neopixel_under_charge_colour;
+        } else {
+            new_event = 0;
+            new_led_colour = charge_mode_config.neopixel_normal_charge_colour;
+        }
+
+        // Update event bits
+        runtime_state.charge_mode_event &= ~(CHARGE_MODE_EVENT_UNDER_CHARGE |
+                                               CHARGE_MODE_EVENT_OVER_CHARGE);
+        runtime_state.charge_mode_event |= new_event;
+
+        // Update LED only when classification changes (avoid flicker)
+        if (new_led_colour != last_led_state) {
+            charge_mode_set_led(new_led_colour);
+            last_led_state = new_led_colour;
+
+            if (new_event == CHARGE_MODE_EVENT_OVER_CHARGE) {
+                ESP_LOGW(TAG, "OVER CHARGE: weight=%.4f, error=%.4f", measurement, error);
+            } else if (new_event == CHARGE_MODE_EVENT_UNDER_CHARGE) {
+                ESP_LOGW(TAG, "UNDER CHARGE: weight=%.4f, error=%.4f", measurement, error);
+            } else {
+                ESP_LOGI(TAG, "GOOD CHARGE: weight=%.4f, error=%.4f", measurement, error);
+            }
+        }
 
         // Stop condition: 5 stable readings with very negative mean (cup removed)
         if (data_buffer.count >= 5) {

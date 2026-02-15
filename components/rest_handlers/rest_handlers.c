@@ -696,8 +696,9 @@ char* rest_charge_mode_state_handler(int num_params, char *params[], char *value
              runtime_state.profile_name,
              elapsed_time_buffer);
 
-    // Clear events after reading (matches original RP2040 behaviour)
-    charge_mode_clear_events();
+    // Events persist until next charge cycle (cleared in do_wait_for_zero).
+    // Web UI now calculates over/under inline from weight data, so events
+    // don't need to be cleared after each REST read.
 
     return charge_mode_state_json_buffer;
 }

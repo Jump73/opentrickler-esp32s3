@@ -888,11 +888,19 @@ void ui_screens_update(void)
         }
         lv_obj_align(s_lbl_charge_weight, LV_ALIGN_CENTER, 0, -2);
 
-        // Show over/under charge only when dispensing is done and cup is still on scale
+        // Show over/under charge only when dispensing is done and cup is still on scale.
+        // Use fine_stop_threshold from config (same as charge_mode.c post-charge analysis
+        // and LED colour logic) to keep display, LED, and web UI consistent.
         if (rt.charge_mode_state == CHARGE_MODE_WAIT_FOR_CUP_REMOVAL && weight_valid) {
-            if (weight > rt.target_charge_weight + 0.02f) {
+            float threshold = 0.03f;  // fallback
+            charge_mode_config_t cm_cfg;
+            if (charge_mode_get_config(&cm_cfg) == ESP_OK) {
+                threshold = cm_cfg.fine_stop_threshold;
+            }
+            float err = rt.target_charge_weight - weight;
+            if (err <= -threshold) {
                 lv_label_set_text(s_lbl_charge_result, "OVER CHARGE");
-            } else if (weight < rt.target_charge_weight - 0.02f) {
+            } else if (err >= threshold) {
                 lv_label_set_text(s_lbl_charge_result, "UNDER CHARGE");
             } else {
                 lv_label_set_text(s_lbl_charge_result, "OK");
