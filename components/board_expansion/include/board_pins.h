@@ -3,6 +3,9 @@
  *
  * Pin mapping based on original Raspberry Pi Pico W design, adapted for ESP32-S3.
  * This preserves the same PCB layout with ESP32-S3 in Pico form factor.
+ *
+ * Canonical pin definitions are in ot_pins.h (used by main.c).
+ * This file must stay in sync with ot_pins.h.
  */
 
 #ifndef BOARD_PINS_H_
@@ -38,21 +41,29 @@ extern "C" {
 
 // ========== Display Pins (SPI) ==========
 
-// Mini12864 LCD (SPI)
-#define DISPLAY_SPI_NUM     SPI2_HOST
-#define DISPLAY_MOSI_PIN    GPIO_NUM_2   // DISPLAY0_TX
-#define DISPLAY_SCK_PIN     GPIO_NUM_40  // DISPLAY0_SCK
-#define DISPLAY_CS_PIN      GPIO_NUM_39  // DISPLAY0_CS
-#define DISPLAY_DC_PIN      GPIO_NUM_4   // DISPLAY0_A0
-#define DISPLAY_RST_PIN     GPIO_NUM_5   // DISPLAY0_RESET
-#define DISPLAY_MISO_PIN    GPIO_NUM_38  // DISPLAY0_RX (usually NC)
+// Mini12864 LCD (SPI3)
+// Pico GP18 pin24 -> ESP32 GPIO1 (SCK)
+// Pico GP19 pin25 -> ESP32 GPIO2 (MOSI)
+// Pico GP17 pin22 -> ESP32 GPIO41 (CS)
+// Pico GP20 pin26 -> ESP32 GPIO4 (A0/DC)
+// Pico GP21 pin27 -> ESP32 GPIO5 (RST)
+#define DISPLAY_SPI_NUM     SPI3_HOST
+#define DISPLAY_MOSI_PIN    GPIO_NUM_2
+#define DISPLAY_SCK_PIN     GPIO_NUM_1
+#define DISPLAY_CS_PIN      GPIO_NUM_41
+#define DISPLAY_DC_PIN      GPIO_NUM_4
+#define DISPLAY_RST_PIN     GPIO_NUM_5
 
 // ========== Rotary Encoder Pins ==========
 
-#define ENCODER_A_PIN       GPIO_NUM_35  // BUTTON0_ENCODER_PIN1
-#define ENCODER_B_PIN       GPIO_NUM_36  // BUTTON0_ENCODER_PIN2
-#define ENCODER_BTN_PIN     GPIO_NUM_6   // BUTTON0_ENC
-#define ENCODER_RST_PIN     GPIO_NUM_37  // BUTTON0_RST
+// Pico GP15 pin20 -> ESP32 GPIO40 (EN1/A)
+// Pico GP14 pin19 -> ESP32 GPIO39 (EN2/B)
+// Pico GP22 pin29 -> ESP32 GPIO6  (BTN)
+// Pico GP12 pin16 -> ESP32 GPIO37 (RST)
+#define ENCODER_A_PIN       GPIO_NUM_40
+#define ENCODER_B_PIN       GPIO_NUM_39
+#define ENCODER_BTN_PIN     GPIO_NUM_6
+#define ENCODER_RST_PIN     GPIO_NUM_37
 
 // ========== Scale Interface (UART) ==========
 
@@ -62,18 +73,23 @@ extern "C" {
 
 // ========== NeoPixel LED ==========
 
-#define NEOPIXEL_PIN        GPIO_NUM_9   // NEOPIXEL_PWM3
-#define NEOPIXEL_COUNT      2
+#define NEOPIXEL_BACKLIGHT_PIN GPIO_NUM_38  // Mini12864 backlight chain (3 LEDs)
+#define NEOPIXEL_PWM3_PIN   GPIO_NUM_9      // External PWM3 LED (mirrors LED1)
+#define NEOPIXEL_COUNT      3               // RGB1 + RGB2 + backlight
 
 // ========== Servo Gate ==========
 
-#define SERVO0_PWM_PIN      GPIO_NUM_8   // SERVO0_PWM (note: conflicts with EEPROM_SCL)
-#define SERVO1_PWM_PIN      GPIO_NUM_9   // SERVO1_PWM
+#define SERVO0_PWM_PIN      GPIO_NUM_8   // SERVO0_PWM
+#define SERVO1_PWM_PIN      GPIO_NUM_9   // SERVO1_PWM (shares pin with NEOPIXEL_PWM3)
 
 // ========== I2C EEPROM ==========
+// Pico GP26 pin31 -> ESP32 GPIO7 (SDA) - per physical pin mapping
+// Pico GP27 pin32 -> ESP32 GPIO8 (SCL) - per physical pin mapping
+// Note: ot_pins.h maps I2C to GPIO35/GPIO36 (Pico GP10/GP11 pins 14/15).
+// Neither is currently used (NVS replaces EEPROM). Keeping both for reference.
 
-#define EEPROM_I2C_SDA_PIN  GPIO_NUM_7   // EEPROM_SDA
-#define EEPROM_I2C_SCL_PIN  GPIO_NUM_8   // EEPROM_SCL
+#define EEPROM_I2C_SDA_PIN  GPIO_NUM_7
+#define EEPROM_I2C_SCL_PIN  GPIO_NUM_8
 
 #ifdef __cplusplus
 }
