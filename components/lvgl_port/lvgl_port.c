@@ -108,13 +108,12 @@ static void disp_flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px
 // ---------------------------------------------------------------------------
 static void encoder_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
 {
+    static bool s_btn_pressed = false;
     enc_event_t evt;
 
     data->enc_diff = 0;
-    data->state = LV_INDEV_STATE_RELEASED;
 
-    // ISR already filters to 1 event per physical detent (÷4 accumulator),
-    // so pass rotation diff through directly.
+    // Drain event queue - track physical button state
     while (encoder_poll(&evt)) {
         switch (evt) {
         case ENC_EVT_CW:
@@ -123,17 +122,20 @@ static void encoder_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
         case ENC_EVT_CCW:
             data->enc_diff--;
             break;
-        case ENC_EVT_BTN_CLICK:
         case ENC_EVT_BTN_DOWN:
-            data->state = LV_INDEV_STATE_PRESSED;
+            s_btn_pressed = true;
             break;
         case ENC_EVT_BTN_UP:
-            data->state = LV_INDEV_STATE_RELEASED;
+        case ENC_EVT_BTN_CLICK:
+            s_btn_pressed = false;
             break;
         default:
             break;
         }
     }
+
+    // Report current physical state - LVGL handles click/long-press internally
+    data->state = s_btn_pressed ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
 }
 
 // ---------------------------------------------------------------------------

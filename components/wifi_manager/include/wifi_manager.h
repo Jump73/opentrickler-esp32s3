@@ -48,6 +48,9 @@ const char* wifi_manager_get_ip(void);
 // Get connection status
 bool wifi_manager_is_connected(void);
 
+// Check if running in AP mode
+bool wifi_manager_is_ap_mode(void);
+
 // Configuration management (NVS)
 esp_err_t wifi_manager_save_config(const wifi_config_data_t *config);
 esp_err_t wifi_manager_load_config(wifi_config_data_t *config);

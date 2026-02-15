@@ -263,6 +263,13 @@ bool wifi_manager_is_connected(void)
     return s_is_connected;
 }
 
+bool wifi_manager_is_ap_mode(void)
+{
+    wifi_mode_t mode;
+    if (esp_wifi_get_mode(&mode) != ESP_OK) return false;
+    return (mode == WIFI_MODE_AP || mode == WIFI_MODE_APSTA);
+}
+
 // NVS Configuration Management
 #define NVS_NAMESPACE "wifi_config"
 #define NVS_KEY_CONFIG "config"

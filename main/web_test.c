@@ -47,15 +47,13 @@ static void ui_update_task(void *arg)
 // Smart root handler - returns wizard in AP mode, portal in STA mode
 static char* root_page_handler(int num_params, char *params[], char *values[])
 {
-    // Check if we are actually connected to WiFi
-    if (wifi_manager_is_connected()) {
-        // Connected to WiFi (STA mode) - show portal
-        ESP_LOGI(TAG, "Root request - returning portal (connected to WiFi)");
-        return (char*)html_web_portal_html;
-    } else {
-        // Not connected (AP mode) - show wizard
+    // AP mode → wizard, STA mode → portal
+    if (wifi_manager_is_ap_mode()) {
         ESP_LOGI(TAG, "Root request - returning wizard (AP mode)");
         return (char*)html_wizard_html;
+    } else {
+        ESP_LOGI(TAG, "Root request - returning portal (STA mode)");
+        return (char*)html_web_portal_html;
     }
 }
 
