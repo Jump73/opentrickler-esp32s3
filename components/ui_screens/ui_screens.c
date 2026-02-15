@@ -891,7 +891,10 @@ void ui_screens_update(void)
         // Show over/under charge only when dispensing is done and cup is still on scale.
         // Use fine_stop_threshold from config (same as charge_mode.c post-charge analysis
         // and LED colour logic) to keep display, LED, and web UI consistent.
-        if (rt.charge_mode_state == CHARGE_MODE_WAIT_FOR_CUP_REMOVAL && weight_valid) {
+        if (rt.charge_mode_state == CHARGE_MODE_WAIT_FOR_CUP_REMOVAL && weight_valid &&
+            weight >= rt.target_charge_weight * 0.5f) {
+            // Show result only when cup is still on scale (weight near target).
+            // Skip when weight drops far below target (cup being lifted).
             float threshold = 0.03f;  // fallback
             charge_mode_config_t cm_cfg;
             if (charge_mode_get_config(&cm_cfg) == ESP_OK) {

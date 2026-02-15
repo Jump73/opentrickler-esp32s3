@@ -389,37 +389,42 @@ static void do_wait_for_cup_removal(void)
         // Continuously update LED and event based on latest weight.
         // Powder may still settle after motors stop, so the classification
         // can change from OK to OVER CHARGE as weight increases.
+        // Skip LED/event updates if weight dropped far below target (cup being removed).
         float error = runtime_state.target_charge_weight - measurement;
-        uint32_t new_led_colour;
-        uint32_t new_event;
+        bool cup_lifting = (measurement < runtime_state.target_charge_weight * 0.5f);
 
-        if (error <= -charge_mode_config.fine_stop_threshold) {
-            new_event = CHARGE_MODE_EVENT_OVER_CHARGE;
-            new_led_colour = charge_mode_config.neopixel_over_charge_colour;
-        } else if (error >= charge_mode_config.fine_stop_threshold) {
-            new_event = CHARGE_MODE_EVENT_UNDER_CHARGE;
-            new_led_colour = charge_mode_config.neopixel_under_charge_colour;
-        } else {
-            new_event = 0;
-            new_led_colour = charge_mode_config.neopixel_normal_charge_colour;
-        }
+        if (!cup_lifting) {
+            uint32_t new_led_colour;
+            uint32_t new_event;
 
-        // Update event bits
-        runtime_state.charge_mode_event &= ~(CHARGE_MODE_EVENT_UNDER_CHARGE |
-                                               CHARGE_MODE_EVENT_OVER_CHARGE);
-        runtime_state.charge_mode_event |= new_event;
-
-        // Update LED only when classification changes (avoid flicker)
-        if (new_led_colour != last_led_state) {
-            charge_mode_set_led(new_led_colour);
-            last_led_state = new_led_colour;
-
-            if (new_event == CHARGE_MODE_EVENT_OVER_CHARGE) {
-                ESP_LOGW(TAG, "OVER CHARGE: weight=%.4f, error=%.4f", measurement, error);
-            } else if (new_event == CHARGE_MODE_EVENT_UNDER_CHARGE) {
-                ESP_LOGW(TAG, "UNDER CHARGE: weight=%.4f, error=%.4f", measurement, error);
+            if (error <= -charge_mode_config.fine_stop_threshold) {
+                new_event = CHARGE_MODE_EVENT_OVER_CHARGE;
+                new_led_colour = charge_mode_config.neopixel_over_charge_colour;
+            } else if (error >= charge_mode_config.fine_stop_threshold) {
+                new_event = CHARGE_MODE_EVENT_UNDER_CHARGE;
+                new_led_colour = charge_mode_config.neopixel_under_charge_colour;
             } else {
-                ESP_LOGI(TAG, "GOOD CHARGE: weight=%.4f, error=%.4f", measurement, error);
+                new_event = 0;
+                new_led_colour = charge_mode_config.neopixel_normal_charge_colour;
+            }
+
+            // Update event bits
+            runtime_state.charge_mode_event &= ~(CHARGE_MODE_EVENT_UNDER_CHARGE |
+                                                   CHARGE_MODE_EVENT_OVER_CHARGE);
+            runtime_state.charge_mode_event |= new_event;
+
+            // Update LED only when classification changes (avoid flicker)
+            if (new_led_colour != last_led_state) {
+                charge_mode_set_led(new_led_colour);
+                last_led_state = new_led_colour;
+
+                if (new_event == CHARGE_MODE_EVENT_OVER_CHARGE) {
+                    ESP_LOGW(TAG, "OVER CHARGE: weight=%.4f, error=%.4f", measurement, error);
+                } else if (new_event == CHARGE_MODE_EVENT_UNDER_CHARGE) {
+                    ESP_LOGW(TAG, "UNDER CHARGE: weight=%.4f, error=%.4f", measurement, error);
+                } else {
+                    ESP_LOGI(TAG, "GOOD CHARGE: weight=%.4f, error=%.4f", measurement, error);
+                }
             }
         }
 

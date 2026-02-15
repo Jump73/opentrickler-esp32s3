@@ -826,31 +826,6 @@
     </form>
 </dialog>
 
-<dialog id="overThrowDialog" class="modal">
-    <div class="modal-box">
-        <h3 class="font-bold text-lg">Warning</h3>
-        <p class="py-4">Over Throw!</p>
-        <div class="modal-action">
-            <form method="dialog"><button class="btn">OK</button></form>
-        </div>
-    </div>
-    <form method="dialog" class="modal-backdrop">
-        <button>close</button>
-    </form>
-</dialog>
-
-<dialog id="underThrowDialog" class="modal">
-    <div class="modal-box">
-        <h3 class="font-bold text-lg">Warning</h3>
-        <p class="py-4">Under Throw!</p>
-        <div class="modal-action">
-            <form method="dialog"><button class="btn">OK</button></form>
-        </div>
-    </div>
-    <form method="dialog" class="modal-backdrop">
-        <button>close</button>
-    </form>
-</dialog>
 
 <dialog id="settingsAppliedSuccessDialog" class="modal">
     <div class="modal-box" id="settingsAppliedSuccessText">
@@ -923,8 +898,6 @@
     });
 
     var pollSetTimeoutId;
-    var lastShownEvent = 0;
-    var eventDismissed = false;
 
     // Load fine_stop_threshold from charge mode config (used for over/under display)
     window._fineStopThreshold = 0.03;  // fallback default
@@ -937,10 +910,6 @@
             }
         })
         .catch(() => {});
-
-    // Allow user to dismiss over/under throw dialogs at any time
-    document.getElementById('overThrowDialog').addEventListener('close', function() { eventDismissed = true; });
-    document.getElementById('underThrowDialog').addEventListener('close', function() { eventDismissed = true; });
 
     // Set Charge Mode Set Point with REST interface
     function setChargeWeight() {
@@ -1157,7 +1126,8 @@
             var resultText = document.getElementById("chargeResultText");
             if (charge_mode_state == ChargeModeState.REMOVE_CUP &&
                 charge_weight_set_point > 0 &&
-                typeof current_charge_weight === 'number' && !isNaN(current_charge_weight)) {
+                typeof current_charge_weight === 'number' && !isNaN(current_charge_weight) &&
+                current_charge_weight >= charge_weight_set_point * 0.5) {
                 var error = charge_weight_set_point - current_charge_weight;
                 // Use fine_stop_threshold logic (same as display and LED).
                 // We approximate using the threshold from the REST config (loaded at startup).

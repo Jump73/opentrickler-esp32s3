@@ -36,6 +36,9 @@ static bool measurement_valid = false;
 static SemaphoreHandle_t scale_measurement_sem = NULL;
 static SemaphoreHandle_t scale_write_mutex = NULL;
 
+// Pending action queued by REST handler, executed safely from scale_task
+static volatile scale_action_t pending_action = SCALE_ACTION_NO_ACTION;
+
 // AND FXi frame (17 bytes): ST,+    0.00 GN\r\n
 typedef union {
     struct __attribute__((__packed__)) {
@@ -213,6 +216,36 @@ static void process_rx_byte(uint8_t rx_byte)
     }
 }
 
+// Execute a pending action from within the scale task (UART-safe)
+static void scale_execute_pending_action(void)
+{
+    scale_action_t action = pending_action;
+    if (action == SCALE_ACTION_NO_ACTION) {
+        return;
+    }
+    pending_action = SCALE_ACTION_NO_ACTION;
+
+    if (action == SCALE_ACTION_FORCE_ZERO) {
+        ESP_LOGI(TAG, "Executing queued force zero");
+        switch (scale_config.scale_driver) {
+            case SCALE_DRIVER_AND_FXI:
+                scale_write("Z\r\n", 3);
+                break;
+            case SCALE_DRIVER_GNG_JJB:
+                scale_write("!t\r\n", 4);
+                break;
+            case SCALE_DRIVER_RADWAG_PS_R2:
+                scale_write("T\r\n", 3);
+                break;
+            default:
+                ESP_LOGW(TAG, "Force zero not supported for this driver");
+                break;
+        }
+        // Give scale time to process tare before next poll
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+}
+
 static void scale_task(void *pvParameters)
 {
     uint8_t rx_byte;
@@ -220,16 +253,29 @@ static void scale_task(void *pvParameters)
     ESP_LOGI(TAG, "Scale task started, driver: %d", scale_config.scale_driver);
 
     while (1) {
+        // Process any queued action safely between polls
+        scale_execute_pending_action();
+
         if (scale_config.scale_driver == SCALE_DRIVER_GNG_JJB) {
-            // G&G JJB: polling mode - request weight every ~100ms (~10 SPS)
-            // Original was ~250ms (~4 SPS). Faster polling improves PID response.
-            // 14-byte frame @ 9600 baud takes ~15ms, 50ms timeout gives 3x margin.
+            // G&G JJB: polling mode - send !p, wait for full frame, repeat.
+            // No artificial delay - waga narzuca tempo odpowiedzi (~15-20ms).
+            // 90ms timeout covers worst case; next !p sent immediately after frame.
             scale_write("!p\r\n", 4);
+            bool got_frame = false;
             while (uart_read_bytes(SCALE_UART_NUM, &rx_byte, 1,
-                                   pdMS_TO_TICKS(50)) > 0) {
+                                   pdMS_TO_TICKS(90)) > 0) {
                 process_rx_byte(rx_byte);
+                if (rx_byte == '\n') {
+                    got_frame = true;
+                    break;
+                }
             }
-            vTaskDelay(pdMS_TO_TICKS(30));
+            if (!got_frame) {
+                // Timeout - flush any partial data and yield briefly
+                uart_flush_input(SCALE_UART_NUM);
+                line_buf_idx = 0;
+                vTaskDelay(pdMS_TO_TICKS(10));
+            }
         } else {
             // Other drivers: continuous output, read bytes as they arrive
             if (uart_read_bytes(SCALE_UART_NUM, &rx_byte, 1,
@@ -464,29 +510,9 @@ esp_err_t scale_set_driver(scale_driver_t driver)
 
 esp_err_t scale_perform_action(scale_action_t action)
 {
-    switch (action) {
-        case SCALE_ACTION_FORCE_ZERO:
-            ESP_LOGI(TAG, "Performing force zero");
-            // Send tare command based on driver
-            switch (scale_config.scale_driver) {
-                case SCALE_DRIVER_AND_FXI:
-                    scale_write("Z\r\n", 3);
-                    break;
-                case SCALE_DRIVER_GNG_JJB:
-                    scale_write("!t\r\n", 4);
-                    break;
-                case SCALE_DRIVER_RADWAG_PS_R2:
-                    scale_write("T\r\n", 3);
-                    break;
-                default:
-                    ESP_LOGW(TAG, "Force zero not supported for this driver");
-                    break;
-            }
-            break;
-        case SCALE_ACTION_NO_ACTION:
-        default:
-            ESP_LOGD(TAG, "No action requested");
-            break;
+    if (action != SCALE_ACTION_NO_ACTION) {
+        ESP_LOGI(TAG, "Queuing scale action: %d", action);
+        pending_action = action;
     }
     return ESP_OK;
 }
