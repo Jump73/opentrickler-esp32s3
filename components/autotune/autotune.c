@@ -213,8 +213,9 @@ static float wait_for_settled_weight(float initial_weight, int timeout_ms)
             if (buf_reset_done && buf.count >= min_readings) {
                 float sd = float_buf_sd(&buf);
                 if (sd < 0.015f) {
-                    // Scale is stable, return mean of fresh readings only
-                    return float_buf_mean(&buf);
+                    // Scale is stable, return last reading (not mean, to avoid
+                    // averaging in slightly lower earlier values from the window)
+                    return settled;
                 }
             }
         }
