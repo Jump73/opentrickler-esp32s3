@@ -50,6 +50,13 @@ char* rest_charge_mode_state_handler(int num_params, char *params[], char *value
 char* rest_profile_config_handler(int num_params, char *params[], char *values[]);
 char* rest_profile_summary_handler(int num_params, char *params[], char *values[]);
 
+// Coarse motor autotuning endpoint
+// Parameters: a0=start(bool), a1=coarse_target_weight(float), a2=coarse_target_time_s(float),
+//            a3=fine_target_weight(float), a4=fine_target_time_s(float), a5=max_runs_per_stage(int),
+//            a6=weight_tolerance(float), a7=time_tolerance_s(float), a8=auto_apply(bool),
+//            ee=save(bool), ca=cancel(bool)
+char* rest_autotune_coarse_handler(int num_params, char *params[], char *values[]);
+
 // Cleanup mode state endpoint
 // State parameters: s0=state(int), s1=trickler_speed(float)
 // Returns: s0=state, s1=trickler_speed
