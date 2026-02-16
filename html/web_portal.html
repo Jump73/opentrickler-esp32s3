@@ -102,6 +102,26 @@
                 </div>
             </div>
 
+            <div class="grid grid-cols-1 gap-2 px-4">
+                <div class="divider text-xs">Charge History</div>
+                <div class="overflow-x-auto max-h-64 overflow-y-auto">
+                    <table class="table table-xs table-zebra w-full">
+                        <thead class="sticky top-0 bg-base-200">
+                            <tr>
+                                <th>#</th>
+                                <th>Target</th>
+                                <th>Weight</th>
+                                <th>Error</th>
+                                <th>Time</th>
+                                <th>Result</th>
+                            </tr>
+                        </thead>
+                        <tbody id="chargeHistoryBody"></tbody>
+                    </table>
+                </div>
+                <button class="btn btn-sm btn-outline w-full" onclick="exportChargeHistory()">Export CSV</button>
+            </div>
+
         </div>
     </section>
 
@@ -161,7 +181,7 @@
 
                     <!-- Message -->
                     <div id="autotuneMessageBanner" class="alert py-2 mb-1">
-                        <span id="autotuneMessageText" class="text-lg font-bold"></span>
+                        <span id="autotuneMessageText" class="text-2xl font-bold"></span>
                     </div>
 
                     <!-- Current PID values -->
@@ -191,6 +211,26 @@
                         <div class="text-center"><div class="text-xs opacity-60">W.Err</div><div id="atFineBestWErr" class="font-mono text-xs">-</div></div>
                         <div class="text-center"><div class="text-xs opacity-60">T.Err</div><div id="atFineBestTErr" class="font-mono text-xs">-</div></div>
                     </div>
+
+                    <!-- Trial History Table -->
+                    <div class="divider text-xs my-0">Trial History</div>
+                    <div class="overflow-x-auto max-h-48 overflow-y-auto">
+                        <table class="table table-xs table-zebra w-full">
+                            <thead class="sticky top-0 bg-base-200">
+                                <tr>
+                                    <th>#</th>
+                                    <th>Stage</th>
+                                    <th>Kp</th>
+                                    <th>Kd</th>
+                                    <th>Weight</th>
+                                    <th>W.Err</th>
+                                    <th>Time</th>
+                                </tr>
+                            </thead>
+                            <tbody id="atTrialsTableBody">
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
 
                 <!-- Parameter form -->
@@ -209,7 +249,7 @@
 
                     <div class="grid grid-cols-2 gap-x-2 gap-y-1">
                         <div>
-                            <span class="label-text text-xs">Coarse Target Weight (gr)</span>
+                            <span class="label-text text-xs">Coarse Target Weight (gn)</span>
                             <input id="atParamA1" type="number" class="input input-bordered input-sm w-full" step="0.1" value="18.5">
                         </div>
                         <div>
@@ -217,7 +257,7 @@
                             <input id="atParamA2" type="number" class="input input-bordered input-sm w-full" step="0.1" value="6.0">
                         </div>
                         <div>
-                            <span class="label-text text-xs">Fine Target Weight (gr)</span>
+                            <span class="label-text text-xs">Fine Target Weight (gn)</span>
                             <input id="atParamA3" type="number" class="input input-bordered input-sm w-full" step="0.1" value="20.0">
                         </div>
                         <div>
@@ -229,11 +269,11 @@
                             <input id="atParamA5" type="number" class="input input-bordered input-sm w-full" step="1" value="15">
                         </div>
                         <div>
-                            <span class="label-text text-xs">Coarse Wt Tolerance (gr)</span>
+                            <span class="label-text text-xs">Coarse Wt Tolerance (gn)</span>
                             <input id="atParamA6" type="number" class="input input-bordered input-sm w-full" step="0.001" value="0.10">
                         </div>
                         <div>
-                            <span class="label-text text-xs">Fine Wt Tolerance (gr)</span>
+                            <span class="label-text text-xs">Fine Wt Tolerance (gn)</span>
                             <input id="atParamA9" type="number" class="input input-bordered input-sm w-full" step="0.001" value="0.03">
                         </div>
                         <div>
@@ -1075,6 +1115,11 @@
     });
 
     var pollSetTimeoutId;
+    var _lastChargeState = 0;
+    var _lastRemoveCupWeight = null;
+    var _lastRemoveCupTarget = null;
+    var _lastRemoveCupTime = null;
+    var chargeHistory = [];
 
     // Load fine_stop_threshold from charge mode config (used for over/under display)
     window._fineStopThreshold = 0.03;  // fallback default
@@ -1333,6 +1378,27 @@
                 banner.className = "alert hidden text-center font-bold text-lg justify-center";
                 resultText.textContent = "";
             }
+
+            // Capture weight at transition CHARGING -> REMOVE_CUP (just finished dispensing)
+            if (_lastChargeState == ChargeModeState.CHARGING &&
+                charge_mode_state == ChargeModeState.REMOVE_CUP &&
+                charge_weight_set_point > 0 &&
+                typeof current_charge_weight === 'number' && !isNaN(current_charge_weight)) {
+                _lastRemoveCupWeight = current_charge_weight;
+                _lastRemoveCupTarget = charge_weight_set_point;
+                _lastRemoveCupTime = charge_time_seconds;
+            }
+
+            // Record result at transition REMOVE_CUP -> RETURN_CUP
+            if (_lastChargeState == ChargeModeState.REMOVE_CUP &&
+                charge_mode_state == ChargeModeState.RETURN_CUP &&
+                _lastRemoveCupWeight !== null) {
+                _addChargeResult(_lastRemoveCupTarget, _lastRemoveCupWeight, _lastRemoveCupTime);
+                _lastRemoveCupWeight = null;
+                _lastRemoveCupTarget = null;
+                _lastRemoveCupTime = null;
+            }
+            _lastChargeState = charge_mode_state;
         })
         .catch(error => {
             console.error("Error reading charge mode settings");
@@ -1347,6 +1413,65 @@
             clearTimeout(pollSetTimeoutId);
             pollSetTimeoutId = setTimeout(pollChargeModeStatus, 500);
         })
+    }
+
+    function _addChargeResult(target, weight, timeStr) {
+        var threshold = window._fineStopThreshold || 0.03;
+        var error = weight - target;
+        var result = "OK";
+        if (error > threshold) result = "OVER";
+        else if (error < -threshold) result = "UNDER";
+
+        chargeHistory.push({
+            n: chargeHistory.length + 1,
+            target: target,
+            weight: weight,
+            error: error,
+            time: timeStr,
+            result: result
+        });
+        _renderChargeHistory();
+    }
+
+    function _renderChargeHistory() {
+        var tbody = document.getElementById("chargeHistoryBody");
+        var html = "";
+        for (var i = chargeHistory.length - 1; i >= 0; i--) {
+            var r = chargeHistory[i];
+            var cls = "";
+            if (r.result === "OVER") cls = "text-error";
+            else if (r.result === "UNDER") cls = "text-warning";
+            else cls = "text-success";
+            html += '<tr class="' + cls + '">' +
+                '<td>' + r.n + '</td>' +
+                '<td>' + r.target.toFixed(3) + '</td>' +
+                '<td class="font-mono">' + r.weight.toFixed(3) + '</td>' +
+                '<td class="font-mono">' + (r.error >= 0 ? "+" : "") + r.error.toFixed(3) + '</td>' +
+                '<td class="font-mono">' + r.time + '</td>' +
+                '<td class="font-bold">' + r.result + '</td>' +
+                '</tr>';
+        }
+        tbody.innerHTML = html;
+    }
+
+    function exportChargeHistory() {
+        if (chargeHistory.length === 0) return;
+        var csv = "#,Target,Weight,Error,Time,Result\n";
+        for (var i = 0; i < chargeHistory.length; i++) {
+            var r = chargeHistory[i];
+            csv += r.n + "," + r.target.toFixed(3) + "," + r.weight.toFixed(3) + "," +
+                   r.error.toFixed(3) + "," + r.time + "," + r.result + "\n";
+        }
+        var blob = new Blob([csv], {type: "text/csv"});
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement("a");
+        var d = new Date();
+        a.href = url;
+        a.download = "charge_history_" + d.getFullYear() + "-" +
+            String(d.getMonth()+1).padStart(2,"0") + "-" +
+            String(d.getDate()).padStart(2,"0") + ".csv";
+        a.click();
+        URL.revokeObjectURL(url);
     }
 
     // Send scale force zero command
@@ -1888,6 +2013,9 @@
     });
 
     var autotunePollTimeoutId;
+    var _atTrials = [];
+    var _atLastRunsDone = 0;
+    var _atLastState = 0;
 
     // Populate the profile selector dropdown
     function autotuneLoadProfiles() {
@@ -2042,6 +2170,27 @@
         if (substatus >= AutotuneSub.STABILIZING) subStabilizing.classList.add("step-primary");
     }
 
+    function _renderAtTrials() {
+        var tbody = document.getElementById("atTrialsTableBody");
+        var html = "";
+        for (var i = _atTrials.length - 1; i >= 0; i--) {
+            var t = _atTrials[i];
+            var weClass = (t.we > 0) ? "text-error" : (t.we < -0.005 ? "text-warning" : "");
+            var stageBadge = t.stage === 1 ? '<span class="badge badge-xs badge-primary">C</span>'
+                                           : '<span class="badge badge-xs badge-secondary">F</span>';
+            html += '<tr>' +
+                '<td>' + t.n + '</td>' +
+                '<td>' + stageBadge + '</td>' +
+                '<td class="font-mono">' + t.kp.toFixed(4) + '</td>' +
+                '<td class="font-mono">' + t.kd.toFixed(4) + '</td>' +
+                '<td class="font-mono">' + t.sw.toFixed(3) + '</td>' +
+                '<td class="font-mono ' + weClass + '">' + (t.we >= 0 ? "+" : "") + t.we.toFixed(3) + '</td>' +
+                '<td class="font-mono">' + t.time.toFixed(2) + '</td>' +
+                '</tr>';
+        }
+        tbody.innerHTML = html;
+    }
+
     function pollAutotuneStatus() {
         fetch("/rest/autotune_coarse")
         .then(response => response.json())
@@ -2088,7 +2237,7 @@
             var curW = data["current_weight"];
             var curT = data["current_time"];
             if (state == AutotuneState.RUNNING && curW != null) {
-                document.getElementById("autotuneLiveWeight").textContent = curW.toFixed(3) + " gr";
+                document.getElementById("autotuneLiveWeight").textContent = curW.toFixed(3) + " gn";
                 document.getElementById("autotuneLiveTime").textContent = (substatus == AutotuneSub.DISPENSING && curT) ? curT.toFixed(2) + " s" : "-";
             } else if (state != AutotuneState.RUNNING) {
                 document.getElementById("autotuneLiveWeight").textContent = "-";
@@ -2098,7 +2247,7 @@
             // Last dispense result (settled after motor inertia)
             var lastW = data["last_weight"];
             var lastT = data["last_time"];
-            document.getElementById("autotuneLastWeight").textContent = (lastW != null && lastW > 0) ? lastW.toFixed(3) + " gr" : "-";
+            document.getElementById("autotuneLastWeight").textContent = (lastW != null && lastW > 0) ? lastW.toFixed(3) + " gn" : "-";
             document.getElementById("autotuneLastTime").textContent = (lastT != null && lastT > 0) ? lastT.toFixed(2) + " s" : "-";
 
             // Progress
@@ -2133,6 +2282,30 @@
             document.getElementById("atFineBestKd").textContent = (data["fine_best_kd"] || 0).toFixed(5);
             document.getElementById("atFineBestWErr").textContent = (data["fine_best_abs_err"] || 0).toFixed(3);
             document.getElementById("atFineBestTErr").textContent = (data["fine_best_time_err"] || 0).toFixed(3);
+
+            // Detect new trial: runs_done increased
+            if (state == AutotuneState.RUNNING && runsDone > _atLastRunsDone && runsDone > 0) {
+                var lastW = data["last_weight"] || 0;
+                var lastT = data["last_time"] || 0;
+                var kp = data["active_kp"] || 0;
+                var kd = data["active_kd"] || 0;
+                var stg = stage;
+                // Target from form inputs
+                var tgt = (stg === 1)
+                    ? parseFloat(document.getElementById("atParamA1").value) || 0
+                    : parseFloat(document.getElementById("atParamA3").value) || 0;
+                var we = lastW - tgt;
+                _atTrials.push({n: runsDone, stage: stg, kp: kp, kd: kd, sw: lastW, we: we, time: lastT});
+                _renderAtTrials();
+            }
+            // Reset on new autotune start
+            if (_atLastState != AutotuneState.RUNNING && state == AutotuneState.RUNNING) {
+                _atTrials = [];
+                _atLastRunsDone = 0;
+                _renderAtTrials();
+            }
+            _atLastRunsDone = runsDone;
+            _atLastState = state;
         })
         .catch(error => {
             console.error("Error polling autotune status", error);

@@ -998,6 +998,42 @@ char* rest_autotune_coarse_handler(int num_params, char *params[], char *values[
     return autotune_json_buffer;
 }
 
+// Autotune trial history handler - returns JSON array of trial results
+char* rest_autotune_trials_handler(int num_params, char *params[], char *values[])
+{
+    // Buffer for up to 64 trials, ~110 chars each
+    static char trials_json_buffer[8192];
+    static autotune_trial_result_t trials[64];
+
+    int count = autotune_get_trials(trials, 64);
+    ESP_LOGI("REST", "autotune_trials: count=%d", count);
+
+    int offset = snprintf(trials_json_buffer, sizeof(trials_json_buffer), "{\"trials\":[");
+
+    for (int i = 0; i < count; i++) {
+        offset += snprintf(trials_json_buffer + offset,
+                          sizeof(trials_json_buffer) - offset,
+                          "%s{\"n\":%d,\"s\":%d,\"kp\":%.5f,\"kd\":%.5f,\"we\":%.4f,\"te\":%.3f,\"os\":%.4f,\"sw\":%.3f,\"t\":%.2f}",
+                          (i > 0) ? "," : "",
+                          i + 1,
+                          trials[i].stage,
+                          trials[i].kp,
+                          trials[i].kd,
+                          trials[i].weight_error,
+                          trials[i].time_error,
+                          trials[i].overshoot,
+                          trials[i].settled_weight,
+                          trials[i].elapsed_s);
+        if (offset >= (int)sizeof(trials_json_buffer) - 10) break;
+    }
+
+    snprintf(trials_json_buffer + offset,
+             sizeof(trials_json_buffer) - offset,
+             "],\"count\":%d}", count);
+
+    return trials_json_buffer;
+}
+
 // Cleanup mode state handler
 char* rest_cleanup_mode_state_handler(int num_params, char *params[], char *values[])
 {

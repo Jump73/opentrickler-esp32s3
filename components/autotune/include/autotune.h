@@ -88,10 +88,25 @@ typedef struct {
     char message[96];
 } autotune_status_t;
 
+// Trial result for web UI display
+typedef struct {
+    uint8_t stage;        // 1 = coarse, 2 = fine
+    float kp;
+    float kd;
+    float weight_error;   // signed: positive = overshoot
+    float time_error;     // signed: positive = too slow
+    float overshoot;      // max weight above target (gn)
+    float settled_weight;
+    float elapsed_s;
+} autotune_trial_result_t;
+
 esp_err_t autotune_init(void);
 esp_err_t autotune_start(const autotune_request_t *request);
 esp_err_t autotune_get_status(autotune_status_t *status);
 esp_err_t autotune_cancel(void);
+
+// Get trial results for current stage. Returns number of trials copied.
+int autotune_get_trials(autotune_trial_result_t *out, int max_count);
 
 #ifdef __cplusplus
 }

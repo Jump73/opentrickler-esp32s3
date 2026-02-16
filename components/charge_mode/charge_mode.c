@@ -253,9 +253,9 @@ static void do_wait_for_complete(void)
     TickType_t last_sample_tick = xTaskGetTickCount();
     bool coarse_running = true;
 
-    // Enable motors
+    // Enable coarse motor first; fine starts after coarse stops
     motor_enable(MOTOR_COARSE, true);
-    motor_enable(MOTOR_FINE, true);
+    motor_enable(MOTOR_FINE, false);
 
     // Reset timer
     runtime_state.elapsed_time_seconds = 0.0f;
@@ -294,9 +294,16 @@ static void do_wait_for_complete(void)
 
         // ── Coarse motor stop condition ──
         if (error < charge_mode_config.coarse_stop_threshold && coarse_running) {
-            ESP_LOGI(TAG, "Coarse stop at weight=%.4f, error=%.4f, fine only", current_weight, error);
+            ESP_LOGI(TAG, "Coarse stop at weight=%.4f, error=%.4f, switching to fine",
+                     current_weight, error);
             coarse_running = false;
             motor_set_speed(MOTOR_COARSE, 0);
+            motor_enable(MOTOR_COARSE, false);
+            // Start fine motor now that coarse is done
+            motor_enable(MOTOR_FINE, true);
+            // Reset PID state for clean fine motor start
+            integral = 0.0f;
+            last_error = error;
         }
 
         // ── PID calculation ──
@@ -306,23 +313,22 @@ static void do_wait_for_complete(void)
         integral += error;
         float derivative = (error - last_error) / elapsed_ms;
 
-        // Fine motor PID
-        float fine_p = profile->fine_kp * error;
-        float fine_i = profile->fine_ki * integral;
-        float fine_d = profile->fine_kd * derivative;
-        float fine_speed = fmaxf(fine_min_speed, fminf(fine_p + fine_i + fine_d, fine_max_speed));
-
-        motor_set_speed(MOTOR_FINE, fine_speed);
-
-        // Coarse motor PID
         if (coarse_running) {
+            // Coarse phase: only coarse motor runs
             float coarse_p = profile->coarse_kp * error;
             float coarse_i = profile->coarse_ki * integral;
             float coarse_d = profile->coarse_kd * derivative;
             float coarse_speed = fmaxf(coarse_min_speed,
                                         fminf(coarse_p + coarse_i + coarse_d, coarse_max_speed));
-
             motor_set_speed(MOTOR_COARSE, coarse_speed);
+        } else {
+            // Fine phase: only fine motor runs
+            float fine_p = profile->fine_kp * error;
+            float fine_i = profile->fine_ki * integral;
+            float fine_d = profile->fine_kd * derivative;
+            float fine_speed = fmaxf(fine_min_speed,
+                                      fminf(fine_p + fine_i + fine_d, fine_max_speed));
+            motor_set_speed(MOTOR_FINE, fine_speed);
         }
 
         last_sample_tick = current_tick;

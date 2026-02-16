@@ -231,6 +231,7 @@ void app_main(void)
     http_server_register_rest_handler("/rest/cleanup_mode_state", rest_cleanup_mode_state_handler);
     http_server_register_rest_handler("/rest/neopixel_led_config", rest_neopixel_led_config_handler);
     http_server_register_rest_handler("/rest/autotune_coarse", rest_autotune_coarse_handler);
+    http_server_register_rest_handler("/rest/autotune_trials", rest_autotune_trials_handler);
 
     ESP_LOGI(TAG, "");
     ESP_LOGI(TAG, "============================================");
