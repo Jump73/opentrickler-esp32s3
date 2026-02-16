@@ -66,6 +66,10 @@ typedef struct {
     float active_kp;
     float active_kd;
 
+    // Last dispense result
+    float last_weight;
+    float last_elapsed_s;
+
     float coarse_best_kp;
     float coarse_best_kd;
     float coarse_best_weight_error;

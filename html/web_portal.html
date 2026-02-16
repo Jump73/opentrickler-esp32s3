@@ -113,7 +113,7 @@
 
                 <!-- Status display (visible when running/done/error) -->
                 <div id="autotuneStatusPanel" style="display: none;">
-                    <!-- State & Stage -->
+                    <!-- Stage progress steps -->
                     <ul class="steps w-full mb-4">
                         <li id="autotuneStepIdle" class="step step-primary">Idle</li>
                         <li id="autotuneStepCoarse" class="step">Coarse</li>
@@ -121,13 +121,25 @@
                         <li id="autotuneStepDone" class="step">Done</li>
                     </ul>
 
-                    <!-- Cup cycle steps (substatus) -->
+                    <!-- Cup cycle substatus steps -->
                     <ul class="steps steps-vertical lg:steps-horizontal w-full mb-4">
                         <li id="autotuneSubDispensing" class="step">Dispensing</li>
                         <li id="autotuneSubRemoveCup" class="step">Remove Cup</li>
                         <li id="autotuneSubReturnCup" class="step">Return Cup</li>
                         <li id="autotuneSubStabilizing" class="step">Stabilizing</li>
                     </ul>
+
+                    <!-- Last dispense result -->
+                    <div class="grid grid-cols-2 gap-2 mb-2">
+                        <div class="stat bg-base-200 rounded-box p-2">
+                            <div class="stat-title text-xs">Last Weight</div>
+                            <div id="autotuneLastWeight" class="stat-value text-sm">-</div>
+                        </div>
+                        <div class="stat bg-base-200 rounded-box p-2">
+                            <div class="stat-title text-xs">Last Time</div>
+                            <div id="autotuneLastTime" class="stat-value text-sm">-</div>
+                        </div>
+                    </div>
 
                     <!-- Progress bar -->
                     <div class="grid grid-cols-1 gap-1 mb-2">
@@ -171,6 +183,16 @@
 
                 <!-- Parameter form -->
                 <div id="autotuneParamsPanel">
+                    <div class="divider text-sm">Profile</div>
+
+                    <div class="grid grid-cols-1 gap-3">
+                        <div class="grid grid-cols-1 gap-1">
+                            <span class="label-text">Target Profile</span>
+                            <select id="atProfileSelect" class="select select-bordered select-primary">
+                            </select>
+                        </div>
+                    </div>
+
                     <div class="divider text-sm">Parameters</div>
 
                     <div class="grid grid-cols-1 gap-3">
@@ -227,19 +249,17 @@
                     </div>
                 </div>
 
-                <!-- Start / Cancel buttons -->
+                <!-- Start / Cancel / Save buttons -->
                 <div class="grid grid-cols-2 gap-2 mt-2">
                     <button id="autotuneStartBtn" class="btn btn-primary btn-lg" onclick="autotuneStart()">Start</button>
                     <button id="autotuneCancelBtn" class="btn btn-warning btn-lg" onclick="autotuneCancel()" disabled="disabled">Cancel</button>
                 </div>
 
+                <button id="autotuneSaveBtn" class="btn btn-success btn-lg mt-2" onclick="autotuneSaveToProfile()" style="display: none;">Save Results to Profile</button>
+
                 <div class="divider">General Control</div>
                 <div class="grid grid-cols-1 gap-2">
                     <button class="btn btn-neutral" onclick="scaleForceZero()">Scale Zero</button>
-                    <div class="grid grid-cols-2 gap-2">
-                        <button class="btn btn-neutral" onclick="servoGateSetState(2)">Gate Open</button>
-                        <button class="btn btn-neutral" onclick="servoGateSetState(1)">Gate Close</button>
-                    </div>
                 </div>
             </div>
         </div>
@@ -1448,6 +1468,9 @@
                 // Remove charge mode polling
                 clearTimeout(pollSetTimeoutId);
 
+                // Load available profiles into selector
+                autotuneLoadProfiles();
+
                 // Start autotune status polling
                 _restartAutotunePoll();
                 break;
@@ -1855,20 +1878,51 @@
 
     var autotunePollTimeoutId;
 
+    // Populate the profile selector dropdown
+    function autotuneLoadProfiles() {
+        fetch("/rest/profile_summary")
+        .then(response => response.json())
+        .then(data => {
+            const select = document.getElementById("atProfileSelect");
+            const allProfiles = data["s0"];
+            const currentIdx = data["s1"];
+
+            select.options.length = 0;
+            for (const idx in allProfiles) {
+                var option = document.createElement("option");
+                option.value = idx;
+                option.innerText = allProfiles[idx];
+                select.appendChild(option);
+            }
+            select.value = currentIdx;
+        })
+        .catch(error => {
+            console.error("Error loading profiles for autotune", error);
+        });
+    }
+
     function autotuneStart() {
-        const a1 = document.getElementById("atParamA1").value;
-        const a2 = document.getElementById("atParamA2").value;
-        const a3 = document.getElementById("atParamA3").value;
-        const a4 = document.getElementById("atParamA4").value;
-        const a5 = document.getElementById("atParamA5").value;
-        const a6 = document.getElementById("atParamA6").value;
-        const a7 = document.getElementById("atParamA7").value;
-        const a8 = document.getElementById("atParamA8").value;
-        const ee = document.getElementById("atParamEE").value;
+        // Switch to selected profile before starting
+        const profileIdx = document.getElementById("atProfileSelect").value;
+        const switchUri = `/rest/profile_config?pf=${encodeURIComponent(profileIdx)}`;
 
-        const uri = `/rest/autotune_coarse?a0=true&a1=${encodeURIComponent(a1)}&a2=${encodeURIComponent(a2)}&a3=${encodeURIComponent(a3)}&a4=${encodeURIComponent(a4)}&a5=${encodeURIComponent(a5)}&a6=${encodeURIComponent(a6)}&a7=${encodeURIComponent(a7)}&a8=${encodeURIComponent(a8)}&ee=${encodeURIComponent(ee)}`;
+        fetch(switchUri)
+        .then(response => response.json())
+        .then(() => {
+            const a1 = document.getElementById("atParamA1").value;
+            const a2 = document.getElementById("atParamA2").value;
+            const a3 = document.getElementById("atParamA3").value;
+            const a4 = document.getElementById("atParamA4").value;
+            const a5 = document.getElementById("atParamA5").value;
+            const a6 = document.getElementById("atParamA6").value;
+            const a7 = document.getElementById("atParamA7").value;
+            const a8 = document.getElementById("atParamA8").value;
+            const ee = document.getElementById("atParamEE").value;
 
-        fetch(uri)
+            const uri = `/rest/autotune_coarse?a0=true&a1=${encodeURIComponent(a1)}&a2=${encodeURIComponent(a2)}&a3=${encodeURIComponent(a3)}&a4=${encodeURIComponent(a4)}&a5=${encodeURIComponent(a5)}&a6=${encodeURIComponent(a6)}&a7=${encodeURIComponent(a7)}&a8=${encodeURIComponent(a8)}&ee=${encodeURIComponent(ee)}`;
+
+            return fetch(uri);
+        })
         .then(response => response.json())
         .then(data => {
             _restartAutotunePoll();
@@ -1887,6 +1941,35 @@
         })
         .catch(error => {
             console.error("Error canceling autotune", error);
+        });
+    }
+
+    // Save the best PID values to the selected profile via REST
+    function autotuneSaveToProfile() {
+        const profileIdx = document.getElementById("atProfileSelect").value;
+
+        // Read current best values from the displayed results
+        const coarseKp = document.getElementById("atCoarseBestKp").textContent;
+        const coarseKd = document.getElementById("atCoarseBestKd").textContent;
+        const fineKp = document.getElementById("atFineBestKp").textContent;
+        const fineKd = document.getElementById("atFineBestKd").textContent;
+
+        if (coarseKp === "-" || coarseKp === "0.00000") {
+            return;
+        }
+
+        // Write PID values to the selected profile and save to EEPROM
+        // p3=coarse_kp, p5=coarse_kd, p8=fine_kp, p10=fine_kd
+        const uri = `/rest/profile_config?pf=${encodeURIComponent(profileIdx)}&p3=${encodeURIComponent(coarseKp)}&p5=${encodeURIComponent(coarseKd)}&p8=${encodeURIComponent(fineKp)}&p10=${encodeURIComponent(fineKd)}&ee=true`;
+
+        fetch(uri)
+        .then(response => response.json())
+        .then(data => {
+            const dialog = document.getElementById("settingsAppliedSuccessDialog");
+            dialog.showModal();
+        })
+        .catch(error => {
+            console.error("Error saving autotune results to profile", error);
         });
     }
 
@@ -1962,6 +2045,7 @@
             const statusPanel = document.getElementById("autotuneStatusPanel");
             const startBtn = document.getElementById("autotuneStartBtn");
             const cancelBtn = document.getElementById("autotuneCancelBtn");
+            const saveBtn = document.getElementById("autotuneSaveBtn");
 
             // Show status panel when not idle
             if (state != AutotuneState.IDLE) {
@@ -1974,16 +2058,25 @@
             if (state == AutotuneState.RUNNING) {
                 startBtn.disabled = true;
                 cancelBtn.disabled = false;
+                saveBtn.style.display = "none";
             } else {
                 startBtn.disabled = false;
                 cancelBtn.disabled = true;
+                // Show save button only when autotune completed successfully
+                saveBtn.style.display = (state == AutotuneState.DONE) ? "block" : "none";
             }
 
-            // Steps widget
+            // Stage steps widget
             _setAutotuneStepWidget(state, stage);
 
             // Cup cycle substatus widget
             _setAutotuneSubWidget(state == AutotuneState.RUNNING ? substatus : AutotuneSub.IDLE);
+
+            // Last dispense result
+            var lastW = data["last_weight"];
+            var lastT = data["last_time"];
+            document.getElementById("autotuneLastWeight").textContent = (lastW != null && lastW > 0) ? lastW.toFixed(3) + " gr" : "-";
+            document.getElementById("autotuneLastTime").textContent = (lastT != null && lastT > 0) ? lastT.toFixed(2) + " s" : "-";
 
             // Progress
             document.getElementById("autotuneProgressBar").value = progress;

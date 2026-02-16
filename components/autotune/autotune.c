@@ -108,7 +108,7 @@ static bool wait_cup_removal_return_cycle(void)
 {
     // Phase 1: REMOVE_CUP - wait for weight to drop significantly (cup removed)
     s_status.substatus = AUTOTUNE_SUB_REMOVE_CUP;
-    strncpy(s_status.message, "Zabierz pojemnik", sizeof(s_status.message) - 1);
+    strncpy(s_status.message, "Remove cup", sizeof(s_status.message) - 1);
 
     TickType_t start = xTaskGetTickCount();
     bool cup_removed = false;
@@ -136,7 +136,7 @@ static bool wait_cup_removal_return_cycle(void)
     vTaskDelay(pdMS_TO_TICKS(500));
 
     s_status.substatus = AUTOTUNE_SUB_RETURN_CUP;
-    strncpy(s_status.message, "Zwroc pojemnik", sizeof(s_status.message) - 1);
+    strncpy(s_status.message, "Return cup", sizeof(s_status.message) - 1);
 
     start = xTaskGetTickCount();
     bool cup_returned = false;
@@ -163,7 +163,7 @@ static bool wait_cup_removal_return_cycle(void)
 
     // Phase 3: STABILIZING - wait for stable zero reading
     s_status.substatus = AUTOTUNE_SUB_STABILIZING;
-    strncpy(s_status.message, "Stabilizacja wagi...", sizeof(s_status.message) - 1);
+    strncpy(s_status.message, "Stabilizing scale...", sizeof(s_status.message) - 1);
 
     return wait_for_stable_zero();
 }
@@ -386,7 +386,7 @@ static bool tune_coarse_stage(profile_t *profile,
     for (int run = 1; run <= s_request.max_runs_per_stage; run++) {
         // First run: just wait for stable zero; subsequent runs: cup removal/return cycle
         if (run == 1) {
-            strncpy(s_status.message, "Czekam na stabilny odczyt...", sizeof(s_status.message) - 1);
+            strncpy(s_status.message, "Waiting for stable reading...", sizeof(s_status.message) - 1);
             if (!wait_for_stable_zero()) {
                 return false;
             }
@@ -402,7 +402,7 @@ static bool tune_coarse_stage(profile_t *profile,
         s_status.active_kp = kp;
         s_status.active_kd = kd;
         s_status.substatus = AUTOTUNE_SUB_DISPENSING;
-        snprintf(s_status.message, sizeof(s_status.message), "COARSE proba %d/%d", run, s_request.max_runs_per_stage);
+        snprintf(s_status.message, sizeof(s_status.message), "COARSE run %d/%d", run, s_request.max_runs_per_stage);
 
         float final_w = 0.0f;
         float elapsed_s = 0.0f;
@@ -418,6 +418,9 @@ static bool tune_coarse_stage(profile_t *profile,
         if (!ok) {
             return false;
         }
+
+        s_status.last_weight = final_w;
+        s_status.last_elapsed_s = elapsed_s;
 
         float abs_werr = fabsf(final_w - s_request.coarse_target_weight);
         float abs_terr = fabsf(elapsed_s - s_request.coarse_target_time_s);
@@ -497,7 +500,7 @@ static bool tune_fine_stage(profile_t *profile,
         s_status.active_kp = kp;
         s_status.active_kd = kd;
         s_status.substatus = AUTOTUNE_SUB_DISPENSING;
-        snprintf(s_status.message, sizeof(s_status.message), "FINE proba %d/%d", run, s_request.max_runs_per_stage);
+        snprintf(s_status.message, sizeof(s_status.message), "FINE run %d/%d", run, s_request.max_runs_per_stage);
 
         float final_w = 0.0f;
         float fine_elapsed = 0.0f;
@@ -510,6 +513,9 @@ static bool tune_fine_stage(profile_t *profile,
         if (!ok) {
             return false;
         }
+
+        s_status.last_weight = final_w;
+        s_status.last_elapsed_s = fine_elapsed;
 
         float abs_werr = fabsf(final_w - s_request.fine_target_weight);
         float abs_terr = fabsf(fine_elapsed - s_request.fine_target_time_s);
@@ -560,7 +566,7 @@ static void autotune_task(void *arg)
 
     profile_t *profile = profile_get_selected();
     if (!profile) {
-        autotune_finish_error("Brak aktywnego profilu");
+        autotune_finish_error("No active profile");
         s_task_handle = NULL;
         vTaskDelete(NULL);
         return;
@@ -579,7 +585,7 @@ static void autotune_task(void *arg)
                            &best_coarse_kd,
                            &best_coarse_werr,
                            &best_coarse_terr)) {
-        autotune_finish_error("COARSE nie osiagnal tolerancji w limicie prob");
+        autotune_finish_error("COARSE did not reach tolerance within run limit");
         s_task_handle = NULL;
         vTaskDelete(NULL);
         return;
@@ -597,7 +603,7 @@ static void autotune_task(void *arg)
                          &best_fine_kd,
                          &best_fine_werr,
                          &best_fine_terr)) {
-        autotune_finish_error("FINE nie osiagnal tolerancji w limicie prob");
+        autotune_finish_error("FINE did not reach tolerance within run limit");
         s_task_handle = NULL;
         vTaskDelete(NULL);
         return;
@@ -618,7 +624,7 @@ static void autotune_task(void *arg)
     s_status.substatus = AUTOTUNE_SUB_IDLE;
     s_status.state = AUTOTUNE_STATE_DONE;
     s_status.progress_pct = 100.0f;
-    strncpy(s_status.message, "Autotuning coarse+fine zakonczony", sizeof(s_status.message) - 1);
+    strncpy(s_status.message, "Autotune coarse+fine completed", sizeof(s_status.message) - 1);
     s_status.message[sizeof(s_status.message) - 1] = '\0';
 
     stop_all();
@@ -665,7 +671,7 @@ esp_err_t autotune_start(const autotune_request_t *request)
     s_status.state = AUTOTUNE_STATE_RUNNING;
     s_status.stage = AUTOTUNE_STAGE_COARSE;
     s_status.stage_max_runs = s_request.max_runs_per_stage;
-    strncpy(s_status.message, "Autotuning coarse+fine w toku", sizeof(s_status.message) - 1);
+    strncpy(s_status.message, "Autotune coarse+fine in progress", sizeof(s_status.message) - 1);
 
     BaseType_t ret = xTaskCreate(autotune_task,
                                  "autotune",
@@ -675,7 +681,7 @@ esp_err_t autotune_start(const autotune_request_t *request)
                                  &s_task_handle);
     if (ret != pdPASS) {
         s_status.state = AUTOTUNE_STATE_ERROR;
-        strncpy(s_status.message, "Nie udalo sie uruchomic tasku", sizeof(s_status.message) - 1);
+        strncpy(s_status.message, "Failed to start autotune task", sizeof(s_status.message) - 1);
         return ESP_FAIL;
     }
 
@@ -701,7 +707,7 @@ esp_err_t autotune_cancel(void)
     s_status.stage = AUTOTUNE_STAGE_NONE;
     s_status.substatus = AUTOTUNE_SUB_IDLE;
     s_status.progress_pct = 0.0f;
-    strncpy(s_status.message, "Autotuning anulowany", sizeof(s_status.message) - 1);
+    strncpy(s_status.message, "Autotune cancelled", sizeof(s_status.message) - 1);
 
     stop_all();
     return ESP_OK;
