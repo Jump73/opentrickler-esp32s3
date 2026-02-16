@@ -129,8 +129,8 @@
                         <li id="autotuneSubStabilizing" class="step">Stabilizing</li>
                     </ul>
 
-                    <!-- Live + Settled readings in one row -->
-                    <div class="grid grid-cols-4 gap-1 mb-1">
+                    <!-- Live reading -->
+                    <div class="grid grid-cols-2 gap-1 mb-1">
                         <div class="stat bg-primary/10 rounded-box p-1">
                             <div class="stat-title" style="font-size:0.6rem">Live Weight</div>
                             <div id="autotuneLiveWeight" class="stat-value text-xs">-</div>
@@ -139,8 +139,12 @@
                             <div class="stat-title" style="font-size:0.6rem">Live Time</div>
                             <div id="autotuneLiveTime" class="stat-value text-xs">-</div>
                         </div>
+                    </div>
+
+                    <!-- Settled reading -->
+                    <div class="grid grid-cols-2 gap-1 mb-1">
                         <div class="stat bg-base-200 rounded-box p-1">
-                            <div class="stat-title" style="font-size:0.6rem">Settled Wt</div>
+                            <div class="stat-title" style="font-size:0.6rem">Settled Weight</div>
                             <div id="autotuneLastWeight" class="stat-value text-xs">-</div>
                         </div>
                         <div class="stat bg-base-200 rounded-box p-1">
@@ -156,8 +160,8 @@
                     </div>
 
                     <!-- Message -->
-                    <div id="autotuneMessageBanner" class="alert alert-sm py-1 mb-1">
-                        <span id="autotuneMessageText" class="text-xs"></span>
+                    <div id="autotuneMessageBanner" class="alert py-2 mb-1">
+                        <span id="autotuneMessageText" class="text-sm font-semibold"></span>
                     </div>
 
                     <!-- Current PID values -->
