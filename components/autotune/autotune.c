@@ -183,6 +183,8 @@ static float wait_for_settled_weight(float initial_weight, int timeout_ms)
     float_buf_t buf;
     float_buf_reset(&buf);
     float settled = initial_weight;
+    const int min_wait_ms = 1500;  // minimum wait before accepting stability
+    const int min_readings = 10;   // require more readings for reliable settle
 
     TickType_t start = xTaskGetTickCount();
     while (1) {
@@ -192,7 +194,8 @@ static float wait_for_settled_weight(float initial_weight, int timeout_ms)
             settled = m;
             s_status.current_weight = m;
 
-            if (buf.count >= 5) {
+            TickType_t elapsed_ms = (xTaskGetTickCount() - start) * portTICK_PERIOD_MS;
+            if (buf.count >= min_readings && elapsed_ms >= (TickType_t)min_wait_ms) {
                 float sd = float_buf_sd(&buf);
                 if (sd < 0.015f) {
                     // Scale is stable, return mean
@@ -266,7 +269,7 @@ static bool run_single_motor_dispense(motor_type_t motor,
                 motor_enable(MOTOR_FINE, false);
             }
             // Wait for scale to settle after motor inertia
-            *final_w = wait_for_settled_weight(weight, 2000);
+            *final_w = wait_for_settled_weight(weight, 5000);
             s_status.current_weight = *final_w;
             return true;
         }
@@ -289,7 +292,7 @@ static bool run_single_motor_dispense(motor_type_t motor,
                 motor_enable(MOTOR_FINE, false);
             }
             // Wait for scale to settle after motor inertia
-            *final_w = wait_for_settled_weight(weight, 2000);
+            *final_w = wait_for_settled_weight(weight, 5000);
             s_status.current_weight = *final_w;
             return true;
         }
