@@ -488,7 +488,7 @@ static bool tune_coarse_stage(profile_t *profile,
         ESP_LOGI(TAG, "COARSE run %d/%d: kp=%.5f kd=%.5f weight=%.4f t=%.2f err_w=%.4f err_t=%.3f",
                  run, s_request.max_runs_per_stage, kp, kd, final_w, elapsed_s, abs_werr, abs_terr);
 
-        if (abs_werr <= s_request.weight_tolerance && abs_terr <= s_request.time_tolerance_s) {
+        if (abs_werr <= s_request.coarse_weight_tolerance && abs_terr <= s_request.time_tolerance_s) {
             ESP_LOGI(TAG, "COARSE tuned to tolerance on run %d", run);
             tolerance_reached = true;
             break;
@@ -583,7 +583,7 @@ static bool tune_fine_stage(profile_t *profile,
         ESP_LOGI(TAG, "FINE run %d/%d: kp=%.5f kd=%.5f weight=%.4f t=%.2f err_w=%.4f err_t=%.3f",
                  run, s_request.max_runs_per_stage, kp, kd, final_w, fine_elapsed, abs_werr, abs_terr);
 
-        if (abs_werr <= s_request.weight_tolerance && abs_terr <= s_request.time_tolerance_s) {
+        if (abs_werr <= s_request.fine_weight_tolerance && abs_terr <= s_request.time_tolerance_s) {
             ESP_LOGI(TAG, "FINE tuned to tolerance on run %d", run);
             tolerance_reached = true;
             break;
@@ -704,7 +704,8 @@ esp_err_t autotune_start(const autotune_request_t *request)
         request->fine_target_weight <= 0.01f ||
         request->fine_target_time_s <= 0.1f ||
         request->max_runs_per_stage < 1 ||
-        request->weight_tolerance <= 0.0f ||
+        request->coarse_weight_tolerance <= 0.0f ||
+        request->fine_weight_tolerance <= 0.0f ||
         request->time_tolerance_s <= 0.0f) {
         return ESP_ERR_INVALID_ARG;
     }

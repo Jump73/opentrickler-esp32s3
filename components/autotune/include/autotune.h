@@ -43,8 +43,9 @@ typedef struct {
     int max_runs_per_stage;     // e.g. 15
 
     // Acceptance criteria
-    float weight_tolerance;     // grains
-    float time_tolerance_s;     // seconds
+    float coarse_weight_tolerance;  // grains
+    float fine_weight_tolerance;    // grains
+    float time_tolerance_s;         // seconds
 
     // Optional persistence
     bool auto_apply;

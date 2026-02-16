@@ -899,7 +899,8 @@ char* rest_autotune_coarse_handler(int num_params, char *params[], char *values[
         .fine_target_weight = 20.0f,
         .fine_target_time_s = 2.5f,
         .max_runs_per_stage = 15,
-        .weight_tolerance = 0.03f,
+        .coarse_weight_tolerance = 0.10f,
+        .fine_weight_tolerance = 0.03f,
         .time_tolerance_s = 0.35f,
         .auto_apply = true,
         .save_to_nvs = false,
@@ -925,7 +926,10 @@ char* rest_autotune_coarse_handler(int num_params, char *params[], char *values[
             request.max_runs_per_stage = atoi(values[idx]);
         }
         else if (strcmp(params[idx], "a6") == 0) {
-            request.weight_tolerance = strtof(values[idx], NULL);
+            request.coarse_weight_tolerance = strtof(values[idx], NULL);
+        }
+        else if (strcmp(params[idx], "a9") == 0) {
+            request.fine_weight_tolerance = strtof(values[idx], NULL);
         }
         else if (strcmp(params[idx], "a7") == 0) {
             request.time_tolerance_s = strtof(values[idx], NULL);
