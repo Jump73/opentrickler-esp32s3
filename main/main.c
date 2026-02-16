@@ -14,6 +14,7 @@
 #include "cleanup_mode.h"
 #include "neopixel_led.h"
 #include "system_control.h"
+#include "autotune.h"
 
 // Display and LVGL
 #include "ot_pins.h"
@@ -111,6 +112,13 @@ void app_main(void)
     ret = system_control_init();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "System control init failed: %s", esp_err_to_name(ret));
+        return;
+    }
+
+    ESP_LOGI(TAG, "Step 7b: Initializing coarse autotune...");
+    ret = autotune_init();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Autotune init failed: %s", esp_err_to_name(ret));
         return;
     }
 
@@ -222,6 +230,7 @@ void app_main(void)
     http_server_register_rest_handler("/rest/profile_summary", rest_profile_summary_handler);
     http_server_register_rest_handler("/rest/cleanup_mode_state", rest_cleanup_mode_state_handler);
     http_server_register_rest_handler("/rest/neopixel_led_config", rest_neopixel_led_config_handler);
+    http_server_register_rest_handler("/rest/autotune_coarse", rest_autotune_coarse_handler);
 
     ESP_LOGI(TAG, "");
     ESP_LOGI(TAG, "============================================");

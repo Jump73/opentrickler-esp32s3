@@ -7,6 +7,7 @@
 #include "cleanup_mode.h"
 #include "neopixel_led.h"
 #include "system_control.h"
+#include "autotune.h"
 #include "ui_screens.h"
 #include "lvgl_port.h"
 #include "esp_log.h"
@@ -881,6 +882,109 @@ char* rest_profile_summary_handler(int num_params, char *params[], char *values[
              current_idx);
 
     return profile_summary_json_buffer;
+}
+
+
+char* rest_autotune_coarse_handler(int num_params, char *params[], char *values[])
+{
+    static char autotune_json_buffer[640];
+    autotune_status_t status = {0};
+
+    bool start = false;
+    bool cancel = false;
+
+    autotune_request_t request = {
+        .coarse_target_weight = 18.5f,
+        .coarse_target_time_s = 6.0f,
+        .fine_target_weight = 20.0f,
+        .fine_target_time_s = 2.5f,
+        .max_runs_per_stage = 15,
+        .weight_tolerance = 0.03f,
+        .time_tolerance_s = 0.35f,
+        .auto_apply = true,
+        .save_to_nvs = false,
+    };
+
+    for (int idx = 0; idx < num_params; idx++) {
+        if (strcmp(params[idx], "a0") == 0) {
+            start = string_to_boolean(values[idx]);
+        }
+        else if (strcmp(params[idx], "a1") == 0) {
+            request.coarse_target_weight = strtof(values[idx], NULL);
+        }
+        else if (strcmp(params[idx], "a2") == 0) {
+            request.coarse_target_time_s = strtof(values[idx], NULL);
+        }
+        else if (strcmp(params[idx], "a3") == 0) {
+            request.fine_target_weight = strtof(values[idx], NULL);
+        }
+        else if (strcmp(params[idx], "a4") == 0) {
+            request.fine_target_time_s = strtof(values[idx], NULL);
+        }
+        else if (strcmp(params[idx], "a5") == 0) {
+            request.max_runs_per_stage = atoi(values[idx]);
+        }
+        else if (strcmp(params[idx], "a6") == 0) {
+            request.weight_tolerance = strtof(values[idx], NULL);
+        }
+        else if (strcmp(params[idx], "a7") == 0) {
+            request.time_tolerance_s = strtof(values[idx], NULL);
+        }
+        else if (strcmp(params[idx], "a8") == 0) {
+            request.auto_apply = string_to_boolean(values[idx]);
+        }
+        else if (strcmp(params[idx], "ee") == 0) {
+            request.save_to_nvs = string_to_boolean(values[idx]);
+        }
+        else if (strcmp(params[idx], "ca") == 0) {
+            cancel = string_to_boolean(values[idx]);
+        }
+    }
+
+    if (cancel) {
+        autotune_cancel();
+    }
+
+    if (start) {
+        esp_err_t start_ret = autotune_start(&request);
+        if (start_ret != ESP_OK) {
+            autotune_get_status(&status);
+            snprintf(autotune_json_buffer, sizeof(autotune_json_buffer),
+                     "{\"ok\":false,\"err\":\"%s\",\"state\":%d,\"stage\":%d,\"msg\":\"%s\"}",
+                     esp_err_to_name(start_ret), (int)status.state, (int)status.stage, status.message);
+            return autotune_json_buffer;
+        }
+    }
+
+    autotune_get_status(&status);
+
+    snprintf(autotune_json_buffer, sizeof(autotune_json_buffer),
+             "{\"ok\":true,\"state\":%d,\"stage\":%d,\"progress\":%.1f,"
+             "\"runs_done\":%d,\"runs_total\":%d,\"stage_run\":%d,\"stage_max_runs\":%d,"
+             "\"active_kp\":%.5f,\"active_kd\":%.5f,"
+             "\"coarse_best_kp\":%.5f,\"coarse_best_kd\":%.5f,\"coarse_best_abs_err\":%.5f,\"coarse_best_time_err\":%.5f,"
+             "\"fine_best_kp\":%.5f,\"fine_best_kd\":%.5f,\"fine_best_abs_err\":%.5f,\"fine_best_time_err\":%.5f,"
+             "\"msg\":\"%s\"}",
+             (int)status.state,
+             (int)status.stage,
+             status.progress_pct,
+             status.runs_done,
+             status.runs_total,
+             status.stage_run,
+             status.stage_max_runs,
+             status.active_kp,
+             status.active_kd,
+             status.coarse_best_kp,
+             status.coarse_best_kd,
+             status.coarse_best_weight_error,
+             status.coarse_best_time_error,
+             status.fine_best_kp,
+             status.fine_best_kd,
+             status.fine_best_weight_error,
+             status.fine_best_time_error,
+             status.message);
+
+    return autotune_json_buffer;
 }
 
 // Cleanup mode state handler
