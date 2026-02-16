@@ -75,6 +75,7 @@ static bool wait_for_stable_zero(void)
 {
     float_buf_t buf;
     float_buf_reset(&buf);
+    const int min_wait_ms = 2000;  // minimum wait before accepting zero
 
     s_status.substatus = AUTOTUNE_SUB_STABILIZING;
 
@@ -88,7 +89,9 @@ static bool wait_for_stable_zero(void)
         if (scale_block_wait_for_measurement(300, &m)) {
             s_status.current_weight = m;
             float_buf_push(&buf, m);
-            if (buf.count >= 8) {
+
+            TickType_t elapsed_ms = (xTaskGetTickCount() - start) * portTICK_PERIOD_MS;
+            if (buf.count >= 10 && elapsed_ms >= (TickType_t)min_wait_ms) {
                 float mean = float_buf_mean(&buf);
                 float sd = float_buf_sd(&buf);
                 if (fabsf(mean) < 0.02f && sd < 0.02f) {
@@ -97,7 +100,7 @@ static bool wait_for_stable_zero(void)
             }
         }
 
-        if ((xTaskGetTickCount() - start) * portTICK_PERIOD_MS > 25000) {
+        if ((xTaskGetTickCount() - start) * portTICK_PERIOD_MS > 30000) {
             return false;
         }
     }
@@ -186,22 +189,31 @@ static float wait_for_settled_weight(float initial_weight, int timeout_ms)
     float_buf_t buf;
     float_buf_reset(&buf);
     float settled = initial_weight;
-    const int min_wait_ms = 1500;  // minimum wait before accepting stability
+    const int min_wait_ms = 2000;  // minimum wait before accepting stability
     const int min_readings = 10;   // require more readings for reliable settle
+    bool buf_reset_done = false;   // reset buffer once after min_wait to discard rising-phase readings
 
     TickType_t start = xTaskGetTickCount();
     while (1) {
         float m = 0.0f;
         if (scale_block_wait_for_measurement(200, &m)) {
-            float_buf_push(&buf, m);
             settled = m;
             s_status.current_weight = m;
 
             TickType_t elapsed_ms = (xTaskGetTickCount() - start) * portTICK_PERIOD_MS;
-            if (buf.count >= min_readings && elapsed_ms >= (TickType_t)min_wait_ms) {
+
+            // After min_wait, reset buffer once to discard old readings from rising phase
+            if (!buf_reset_done && elapsed_ms >= (TickType_t)min_wait_ms) {
+                float_buf_reset(&buf);
+                buf_reset_done = true;
+            }
+
+            float_buf_push(&buf, m);
+
+            if (buf_reset_done && buf.count >= min_readings) {
                 float sd = float_buf_sd(&buf);
                 if (sd < 0.015f) {
-                    // Scale is stable, return mean
+                    // Scale is stable, return mean of fresh readings only
                     return float_buf_mean(&buf);
                 }
             }
