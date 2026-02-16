@@ -2084,12 +2084,12 @@
             // Cup cycle substatus widget
             _setAutotuneSubWidget(state == AutotuneState.RUNNING ? substatus : AutotuneSub.IDLE);
 
-            // Live weight/time during dispensing
+            // Live weight (always when running), live time (during dispensing)
             var curW = data["current_weight"];
             var curT = data["current_time"];
-            if (substatus == AutotuneSub.DISPENSING && curW != null) {
+            if (state == AutotuneState.RUNNING && curW != null) {
                 document.getElementById("autotuneLiveWeight").textContent = curW.toFixed(3) + " gr";
-                document.getElementById("autotuneLiveTime").textContent = (curT || 0).toFixed(2) + " s";
+                document.getElementById("autotuneLiveTime").textContent = (substatus == AutotuneSub.DISPENSING && curT) ? curT.toFixed(2) + " s" : "-";
             } else if (state != AutotuneState.RUNNING) {
                 document.getElementById("autotuneLiveWeight").textContent = "-";
                 document.getElementById("autotuneLiveTime").textContent = "-";

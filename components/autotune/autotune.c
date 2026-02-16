@@ -86,6 +86,7 @@ static bool wait_for_stable_zero(void)
 
         float m = 0.0f;
         if (scale_block_wait_for_measurement(300, &m)) {
+            s_status.current_weight = m;
             float_buf_push(&buf, m);
             if (buf.count >= 8) {
                 float mean = float_buf_mean(&buf);
@@ -119,6 +120,7 @@ static bool wait_cup_removal_return_cycle(void)
 
         float m = 0.0f;
         if (scale_block_wait_for_measurement(300, &m)) {
+            s_status.current_weight = m;
             // Cup is considered removed when weight drops below 0.5g
             if (m < 0.5f) {
                 cup_removed = true;
@@ -147,6 +149,7 @@ static bool wait_cup_removal_return_cycle(void)
 
         float m = 0.0f;
         if (scale_block_wait_for_measurement(300, &m)) {
+            s_status.current_weight = m;
             // Cup returned when any positive weight detected (cup on scale)
             // But we accept near-zero too since an empty cup is very light
             // We detect "returned" by checking for a brief stable reading
@@ -218,6 +221,7 @@ static bool run_single_motor_dispense(motor_type_t motor,
                                       float timeout_s,
                                       float min_speed,
                                       float max_speed,
+                                      int settle_timeout_ms,
                                       float *final_w,
                                       float *elapsed_s)
 {
@@ -269,7 +273,7 @@ static bool run_single_motor_dispense(motor_type_t motor,
                 motor_enable(MOTOR_FINE, false);
             }
             // Wait for scale to settle after motor inertia
-            *final_w = wait_for_settled_weight(weight, 5000);
+            *final_w = wait_for_settled_weight(weight, settle_timeout_ms);
             s_status.current_weight = *final_w;
             return true;
         }
@@ -292,7 +296,7 @@ static bool run_single_motor_dispense(motor_type_t motor,
                 motor_enable(MOTOR_FINE, false);
             }
             // Wait for scale to settle after motor inertia
-            *final_w = wait_for_settled_weight(weight, 5000);
+            *final_w = wait_for_settled_weight(weight, settle_timeout_ms);
             s_status.current_weight = *final_w;
             return true;
         }
@@ -330,6 +334,7 @@ static bool run_fine_stage_with_coarse_prefill(float coarse_kp,
                                                s_request.coarse_target_time_s * 1.7f + 5.0f,
                                                coarse_min,
                                                coarse_max,
+                                               5000,
                                                &prefill_w,
                                                &coarse_elapsed);
 
@@ -348,6 +353,7 @@ static bool run_fine_stage_with_coarse_prefill(float coarse_kp,
                                              s_request.fine_target_time_s * 1.7f + 5.0f,
                                              fine_min,
                                              fine_max,
+                                             8000,
                                              &fine_w,
                                              &fine_elapsed);
 
@@ -457,6 +463,7 @@ static bool tune_coarse_stage(profile_t *profile,
                                             s_request.coarse_target_time_s * 1.7f + 5.0f,
                                             min_speed,
                                             max_speed,
+                                            5000,
                                             &final_w,
                                             &elapsed_s);
         if (!ok) {
