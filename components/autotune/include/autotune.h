@@ -66,7 +66,11 @@ typedef struct {
     float active_kp;
     float active_kd;
 
-    // Last dispense result
+    // Live reading during dispensing
+    float current_weight;
+    float current_elapsed_s;
+
+    // Settled result after motor stop (accounts for inertia)
     float last_weight;
     float last_elapsed_s;
 

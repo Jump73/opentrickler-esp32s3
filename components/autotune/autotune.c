@@ -176,6 +176,38 @@ static void stop_all(void)
     motor_enable(MOTOR_FINE, false);
 }
 
+// Wait for scale to settle after motor stop (inertia causes weight to keep rising).
+// Takes multiple readings and returns when stable, or after timeout.
+static float wait_for_settled_weight(float initial_weight, int timeout_ms)
+{
+    float_buf_t buf;
+    float_buf_reset(&buf);
+    float settled = initial_weight;
+
+    TickType_t start = xTaskGetTickCount();
+    while (1) {
+        float m = 0.0f;
+        if (scale_block_wait_for_measurement(200, &m)) {
+            float_buf_push(&buf, m);
+            settled = m;
+            s_status.current_weight = m;
+
+            if (buf.count >= 5) {
+                float sd = float_buf_sd(&buf);
+                if (sd < 0.015f) {
+                    // Scale is stable, return mean
+                    return float_buf_mean(&buf);
+                }
+            }
+        }
+
+        if ((xTaskGetTickCount() - start) * portTICK_PERIOD_MS > (TickType_t)timeout_ms) {
+            // Timeout - return last reading
+            return settled;
+        }
+    }
+}
+
 static bool run_single_motor_dispense(motor_type_t motor,
                                       float kp,
                                       float kd,
@@ -217,10 +249,15 @@ static bool run_single_motor_dispense(motor_type_t motor,
             dt_ms = 1.0f;
         }
 
+        float cur_elapsed = (float)((now - start_tick) * portTICK_PERIOD_MS) / 1000.0f;
+
+        // Update live readings for UI
+        s_status.current_weight = weight;
+        s_status.current_elapsed_s = cur_elapsed;
+
         float error = target_weight - weight;
         if (error <= stop_threshold) {
-            *final_w = weight;
-            *elapsed_s = (float)((now - start_tick) * portTICK_PERIOD_MS) / 1000.0f;
+            *elapsed_s = cur_elapsed;
             if (motor == MOTOR_COARSE) {
                 motor_set_speed(MOTOR_COARSE, 0.0f);
                 motor_enable(MOTOR_COARSE, false);
@@ -228,6 +265,9 @@ static bool run_single_motor_dispense(motor_type_t motor,
                 motor_set_speed(MOTOR_FINE, 0.0f);
                 motor_enable(MOTOR_FINE, false);
             }
+            // Wait for scale to settle after motor inertia
+            *final_w = wait_for_settled_weight(weight, 2000);
+            s_status.current_weight = *final_w;
             return true;
         }
 
@@ -239,10 +279,8 @@ static bool run_single_motor_dispense(motor_type_t motor,
         last_error = error;
         last_tick = now;
 
-        float elapsed = (float)((now - start_tick) * portTICK_PERIOD_MS) / 1000.0f;
-        if (elapsed > timeout_s) {
-            *final_w = weight;
-            *elapsed_s = elapsed;
+        if (cur_elapsed > timeout_s) {
+            *elapsed_s = cur_elapsed;
             if (motor == MOTOR_COARSE) {
                 motor_set_speed(MOTOR_COARSE, 0.0f);
                 motor_enable(MOTOR_COARSE, false);
@@ -250,6 +288,9 @@ static bool run_single_motor_dispense(motor_type_t motor,
                 motor_set_speed(MOTOR_FINE, 0.0f);
                 motor_enable(MOTOR_FINE, false);
             }
+            // Wait for scale to settle after motor inertia
+            *final_w = wait_for_settled_weight(weight, 2000);
+            s_status.current_weight = *final_w;
             return true;
         }
     }

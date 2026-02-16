@@ -962,6 +962,7 @@ char* rest_autotune_coarse_handler(int num_params, char *params[], char *values[
              "{\"ok\":true,\"state\":%d,\"stage\":%d,\"substatus\":%d,\"progress\":%.1f,"
              "\"runs_done\":%d,\"runs_total\":%d,\"stage_run\":%d,\"stage_max_runs\":%d,"
              "\"active_kp\":%.5f,\"active_kd\":%.5f,"
+             "\"current_weight\":%.4f,\"current_time\":%.2f,"
              "\"last_weight\":%.4f,\"last_time\":%.2f,"
              "\"coarse_best_kp\":%.5f,\"coarse_best_kd\":%.5f,\"coarse_best_abs_err\":%.5f,\"coarse_best_time_err\":%.5f,"
              "\"fine_best_kp\":%.5f,\"fine_best_kd\":%.5f,\"fine_best_abs_err\":%.5f,\"fine_best_time_err\":%.5f,"
@@ -976,6 +977,8 @@ char* rest_autotune_coarse_handler(int num_params, char *params[], char *values[
              status.stage_max_runs,
              status.active_kp,
              status.active_kd,
+             status.current_weight,
+             status.current_elapsed_s,
              status.last_weight,
              status.last_elapsed_s,
              status.coarse_best_kp,

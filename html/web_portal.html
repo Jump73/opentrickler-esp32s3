@@ -129,14 +129,26 @@
                         <li id="autotuneSubStabilizing" class="step">Stabilizing</li>
                     </ul>
 
-                    <!-- Last dispense result -->
+                    <!-- Live reading during dispensing -->
+                    <div class="grid grid-cols-2 gap-2 mb-2">
+                        <div class="stat bg-primary/10 rounded-box p-2">
+                            <div class="stat-title text-xs">Live Weight</div>
+                            <div id="autotuneLiveWeight" class="stat-value text-sm">-</div>
+                        </div>
+                        <div class="stat bg-primary/10 rounded-box p-2">
+                            <div class="stat-title text-xs">Live Time</div>
+                            <div id="autotuneLiveTime" class="stat-value text-sm">-</div>
+                        </div>
+                    </div>
+
+                    <!-- Last dispense result (settled after motor inertia) -->
                     <div class="grid grid-cols-2 gap-2 mb-2">
                         <div class="stat bg-base-200 rounded-box p-2">
-                            <div class="stat-title text-xs">Last Weight</div>
+                            <div class="stat-title text-xs">Settled Weight</div>
                             <div id="autotuneLastWeight" class="stat-value text-sm">-</div>
                         </div>
                         <div class="stat bg-base-200 rounded-box p-2">
-                            <div class="stat-title text-xs">Last Time</div>
+                            <div class="stat-title text-xs">Settled Time</div>
                             <div id="autotuneLastTime" class="stat-value text-sm">-</div>
                         </div>
                     </div>
@@ -2072,7 +2084,18 @@
             // Cup cycle substatus widget
             _setAutotuneSubWidget(state == AutotuneState.RUNNING ? substatus : AutotuneSub.IDLE);
 
-            // Last dispense result
+            // Live weight/time during dispensing
+            var curW = data["current_weight"];
+            var curT = data["current_time"];
+            if (substatus == AutotuneSub.DISPENSING && curW != null) {
+                document.getElementById("autotuneLiveWeight").textContent = curW.toFixed(3) + " gr";
+                document.getElementById("autotuneLiveTime").textContent = (curT || 0).toFixed(2) + " s";
+            } else if (state != AutotuneState.RUNNING) {
+                document.getElementById("autotuneLiveWeight").textContent = "-";
+                document.getElementById("autotuneLiveTime").textContent = "-";
+            }
+
+            // Last dispense result (settled after motor inertia)
             var lastW = data["last_weight"];
             var lastT = data["last_time"];
             document.getElementById("autotuneLastWeight").textContent = (lastW != null && lastW > 0) ? lastW.toFixed(3) + " gr" : "-";
