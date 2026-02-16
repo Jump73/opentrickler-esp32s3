@@ -22,6 +22,14 @@ typedef enum {
     AUTOTUNE_STAGE_FINE = 2,
 } autotune_stage_t;
 
+typedef enum {
+    AUTOTUNE_SUB_IDLE = 0,
+    AUTOTUNE_SUB_DISPENSING = 1,
+    AUTOTUNE_SUB_REMOVE_CUP = 2,
+    AUTOTUNE_SUB_RETURN_CUP = 3,
+    AUTOTUNE_SUB_STABILIZING = 4,
+} autotune_substatus_t;
+
 typedef struct {
     // Stage 1 (coarse only)
     float coarse_target_weight;
@@ -46,6 +54,7 @@ typedef struct {
 typedef struct {
     autotune_state_t state;
     autotune_stage_t stage;
+    autotune_substatus_t substatus;
 
     float progress_pct;
     int runs_total;

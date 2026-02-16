@@ -70,10 +70,13 @@ static float float_buf_sd(const float_buf_t *buf)
     return sqrtf(acc / (float)buf->count);
 }
 
+// Wait for scale to stabilize near zero (no cup cycle - used for initial wait)
 static bool wait_for_stable_zero(void)
 {
     float_buf_t buf;
     float_buf_reset(&buf);
+
+    s_status.substatus = AUTOTUNE_SUB_STABILIZING;
 
     TickType_t start = xTaskGetTickCount();
     while (1) {
@@ -97,6 +100,72 @@ static bool wait_for_stable_zero(void)
             return false;
         }
     }
+}
+
+// Cup removal/return cycle: after dispensing, wait for user to remove cup,
+// then return it, then stabilize at zero - similar to charge mode cycle
+static bool wait_cup_removal_return_cycle(void)
+{
+    // Phase 1: REMOVE_CUP - wait for weight to drop significantly (cup removed)
+    s_status.substatus = AUTOTUNE_SUB_REMOVE_CUP;
+    strncpy(s_status.message, "Zabierz pojemnik", sizeof(s_status.message) - 1);
+
+    TickType_t start = xTaskGetTickCount();
+    bool cup_removed = false;
+    while (!cup_removed) {
+        if (s_status.state != AUTOTUNE_STATE_RUNNING) {
+            return false;
+        }
+
+        float m = 0.0f;
+        if (scale_block_wait_for_measurement(300, &m)) {
+            // Cup is considered removed when weight drops below 0.5g
+            if (m < 0.5f) {
+                cup_removed = true;
+            }
+        }
+
+        if ((xTaskGetTickCount() - start) * portTICK_PERIOD_MS > 60000) {
+            // 60s timeout waiting for cup removal
+            return false;
+        }
+    }
+
+    // Phase 2: RETURN_CUP - wait for weight to increase (cup returned)
+    // Small delay to let user empty the cup
+    vTaskDelay(pdMS_TO_TICKS(500));
+
+    s_status.substatus = AUTOTUNE_SUB_RETURN_CUP;
+    strncpy(s_status.message, "Zwroc pojemnik", sizeof(s_status.message) - 1);
+
+    start = xTaskGetTickCount();
+    bool cup_returned = false;
+    while (!cup_returned) {
+        if (s_status.state != AUTOTUNE_STATE_RUNNING) {
+            return false;
+        }
+
+        float m = 0.0f;
+        if (scale_block_wait_for_measurement(300, &m)) {
+            // Cup returned when any positive weight detected (cup on scale)
+            // But we accept near-zero too since an empty cup is very light
+            // We detect "returned" by checking for a brief stable reading
+            if (fabsf(m) < 2.0f && m > -0.5f) {
+                // Something is on the scale, now wait for stability
+                cup_returned = true;
+            }
+        }
+
+        if ((xTaskGetTickCount() - start) * portTICK_PERIOD_MS > 60000) {
+            return false;
+        }
+    }
+
+    // Phase 3: STABILIZING - wait for stable zero reading
+    s_status.substatus = AUTOTUNE_SUB_STABILIZING;
+    strncpy(s_status.message, "Stabilizacja wagi...", sizeof(s_status.message) - 1);
+
+    return wait_for_stable_zero();
 }
 
 static void stop_all(void)
@@ -315,8 +384,16 @@ static bool tune_coarse_stage(profile_t *profile,
     bool tolerance_reached = false;
 
     for (int run = 1; run <= s_request.max_runs_per_stage; run++) {
-        if (!wait_for_stable_zero()) {
-            return false;
+        // First run: just wait for stable zero; subsequent runs: cup removal/return cycle
+        if (run == 1) {
+            strncpy(s_status.message, "Czekam na stabilny odczyt...", sizeof(s_status.message) - 1);
+            if (!wait_for_stable_zero()) {
+                return false;
+            }
+        } else {
+            if (!wait_cup_removal_return_cycle()) {
+                return false;
+            }
         }
 
         s_status.stage = AUTOTUNE_STAGE_COARSE;
@@ -324,6 +401,8 @@ static bool tune_coarse_stage(profile_t *profile,
         s_status.stage_max_runs = s_request.max_runs_per_stage;
         s_status.active_kp = kp;
         s_status.active_kd = kd;
+        s_status.substatus = AUTOTUNE_SUB_DISPENSING;
+        snprintf(s_status.message, sizeof(s_status.message), "COARSE proba %d/%d", run, s_request.max_runs_per_stage);
 
         float final_w = 0.0f;
         float elapsed_s = 0.0f;
@@ -406,7 +485,9 @@ static bool tune_fine_stage(profile_t *profile,
     bool tolerance_reached = false;
 
     for (int run = 1; run <= s_request.max_runs_per_stage; run++) {
-        if (!wait_for_stable_zero()) {
+        // Every fine run needs cup removal/return cycle
+        // (previous run or coarse stage left powder on scale)
+        if (!wait_cup_removal_return_cycle()) {
             return false;
         }
 
@@ -415,6 +496,8 @@ static bool tune_fine_stage(profile_t *profile,
         s_status.stage_max_runs = s_request.max_runs_per_stage;
         s_status.active_kp = kp;
         s_status.active_kd = kd;
+        s_status.substatus = AUTOTUNE_SUB_DISPENSING;
+        snprintf(s_status.message, sizeof(s_status.message), "FINE proba %d/%d", run, s_request.max_runs_per_stage);
 
         float final_w = 0.0f;
         float fine_elapsed = 0.0f;
@@ -532,6 +615,7 @@ static void autotune_task(void *arg)
     }
 
     s_status.stage = AUTOTUNE_STAGE_NONE;
+    s_status.substatus = AUTOTUNE_SUB_IDLE;
     s_status.state = AUTOTUNE_STATE_DONE;
     s_status.progress_pct = 100.0f;
     strncpy(s_status.message, "Autotuning coarse+fine zakonczony", sizeof(s_status.message) - 1);
@@ -549,6 +633,7 @@ esp_err_t autotune_init(void)
 
     s_status.state = AUTOTUNE_STATE_IDLE;
     s_status.stage = AUTOTUNE_STAGE_NONE;
+    s_status.substatus = AUTOTUNE_SUB_IDLE;
     s_status.progress_pct = 0.0f;
     strncpy(s_status.message, "Idle", sizeof(s_status.message) - 1);
 
@@ -614,6 +699,7 @@ esp_err_t autotune_cancel(void)
 
     s_status.state = AUTOTUNE_STATE_IDLE;
     s_status.stage = AUTOTUNE_STAGE_NONE;
+    s_status.substatus = AUTOTUNE_SUB_IDLE;
     s_status.progress_pct = 0.0f;
     strncpy(s_status.message, "Autotuning anulowany", sizeof(s_status.message) - 1);
 

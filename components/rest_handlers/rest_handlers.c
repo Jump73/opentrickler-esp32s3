@@ -887,7 +887,7 @@ char* rest_profile_summary_handler(int num_params, char *params[], char *values[
 
 char* rest_autotune_coarse_handler(int num_params, char *params[], char *values[])
 {
-    static char autotune_json_buffer[640];
+    static char autotune_json_buffer[700];
     autotune_status_t status = {0};
 
     bool start = false;
@@ -959,7 +959,7 @@ char* rest_autotune_coarse_handler(int num_params, char *params[], char *values[
     autotune_get_status(&status);
 
     snprintf(autotune_json_buffer, sizeof(autotune_json_buffer),
-             "{\"ok\":true,\"state\":%d,\"stage\":%d,\"progress\":%.1f,"
+             "{\"ok\":true,\"state\":%d,\"stage\":%d,\"substatus\":%d,\"progress\":%.1f,"
              "\"runs_done\":%d,\"runs_total\":%d,\"stage_run\":%d,\"stage_max_runs\":%d,"
              "\"active_kp\":%.5f,\"active_kd\":%.5f,"
              "\"coarse_best_kp\":%.5f,\"coarse_best_kd\":%.5f,\"coarse_best_abs_err\":%.5f,\"coarse_best_time_err\":%.5f,"
@@ -967,6 +967,7 @@ char* rest_autotune_coarse_handler(int num_params, char *params[], char *values[
              "\"msg\":\"%s\"}",
              (int)status.state,
              (int)status.stage,
+             (int)status.substatus,
              status.progress_pct,
              status.runs_done,
              status.runs_total,

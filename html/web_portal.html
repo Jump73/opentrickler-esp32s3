@@ -105,6 +105,146 @@
         </div>
     </section>
 
+    <!-- The Autotune Page -->
+    <section id="sectionAutotune" style="display: none;">
+        <div class="grid grid-cols-1 exclude-bottom-nav">
+            <div class="grid grid-cols-1 gap-2 px-4">
+                <div class="divider">Autotune PID</div>
+
+                <!-- Status display (visible when running/done/error) -->
+                <div id="autotuneStatusPanel" style="display: none;">
+                    <!-- State & Stage -->
+                    <ul class="steps w-full mb-4">
+                        <li id="autotuneStepIdle" class="step step-primary">Idle</li>
+                        <li id="autotuneStepCoarse" class="step">Coarse</li>
+                        <li id="autotuneStepFine" class="step">Fine</li>
+                        <li id="autotuneStepDone" class="step">Done</li>
+                    </ul>
+
+                    <!-- Cup cycle steps (substatus) -->
+                    <ul class="steps steps-vertical lg:steps-horizontal w-full mb-4">
+                        <li id="autotuneSubDispensing" class="step">Dispensing</li>
+                        <li id="autotuneSubRemoveCup" class="step">Remove Cup</li>
+                        <li id="autotuneSubReturnCup" class="step">Return Cup</li>
+                        <li id="autotuneSubStabilizing" class="step">Stabilizing</li>
+                    </ul>
+
+                    <!-- Progress bar -->
+                    <div class="grid grid-cols-1 gap-1 mb-2">
+                        <span class="label-text">Progress: <span id="autotuneProgressText">0%</span> (Run <span id="autotuneRunText">0/0</span>)</span>
+                        <progress id="autotuneProgressBar" class="progress progress-primary" value="0" max="100"></progress>
+                    </div>
+
+                    <!-- Message -->
+                    <div id="autotuneMessageBanner" class="alert mb-2">
+                        <span id="autotuneMessageText"></span>
+                    </div>
+
+                    <!-- Current PID values -->
+                    <div class="grid grid-cols-2 gap-2 mb-2">
+                        <div class="stat bg-base-200 rounded-box p-2">
+                            <div class="stat-title text-xs">Active Kp</div>
+                            <div id="autotuneActiveKp" class="stat-value text-sm">-</div>
+                        </div>
+                        <div class="stat bg-base-200 rounded-box p-2">
+                            <div class="stat-title text-xs">Active Kd</div>
+                            <div id="autotuneActiveKd" class="stat-value text-sm">-</div>
+                        </div>
+                    </div>
+
+                    <!-- Best results -->
+                    <div class="divider text-sm">Best Coarse</div>
+                    <div class="grid grid-cols-4 gap-1 mb-2">
+                        <div class="text-center"><div class="text-xs opacity-60">Kp</div><div id="atCoarseBestKp" class="font-mono text-sm">-</div></div>
+                        <div class="text-center"><div class="text-xs opacity-60">Kd</div><div id="atCoarseBestKd" class="font-mono text-sm">-</div></div>
+                        <div class="text-center"><div class="text-xs opacity-60">W.Err</div><div id="atCoarseBestWErr" class="font-mono text-sm">-</div></div>
+                        <div class="text-center"><div class="text-xs opacity-60">T.Err</div><div id="atCoarseBestTErr" class="font-mono text-sm">-</div></div>
+                    </div>
+                    <div class="divider text-sm">Best Fine</div>
+                    <div class="grid grid-cols-4 gap-1 mb-4">
+                        <div class="text-center"><div class="text-xs opacity-60">Kp</div><div id="atFineBestKp" class="font-mono text-sm">-</div></div>
+                        <div class="text-center"><div class="text-xs opacity-60">Kd</div><div id="atFineBestKd" class="font-mono text-sm">-</div></div>
+                        <div class="text-center"><div class="text-xs opacity-60">W.Err</div><div id="atFineBestWErr" class="font-mono text-sm">-</div></div>
+                        <div class="text-center"><div class="text-xs opacity-60">T.Err</div><div id="atFineBestTErr" class="font-mono text-sm">-</div></div>
+                    </div>
+                </div>
+
+                <!-- Parameter form -->
+                <div id="autotuneParamsPanel">
+                    <div class="divider text-sm">Parameters</div>
+
+                    <div class="grid grid-cols-1 gap-3">
+                        <div class="grid grid-cols-1 gap-1">
+                            <span class="label-text">Coarse Target Weight (gr)</span>
+                            <input id="atParamA1" type="number" class="input input-bordered" step="0.1" value="18.5">
+                        </div>
+
+                        <div class="grid grid-cols-1 gap-1">
+                            <span class="label-text">Coarse Target Time (s)</span>
+                            <input id="atParamA2" type="number" class="input input-bordered" step="0.1" value="6.0">
+                        </div>
+
+                        <div class="grid grid-cols-1 gap-1">
+                            <span class="label-text">Fine Target Weight (gr)</span>
+                            <input id="atParamA3" type="number" class="input input-bordered" step="0.1" value="20.0">
+                        </div>
+
+                        <div class="grid grid-cols-1 gap-1">
+                            <span class="label-text">Fine Target Time (s)</span>
+                            <input id="atParamA4" type="number" class="input input-bordered" step="0.1" value="2.5">
+                        </div>
+
+                        <div class="grid grid-cols-1 gap-1">
+                            <span class="label-text">Max Runs per Stage</span>
+                            <input id="atParamA5" type="number" class="input input-bordered" step="1" value="15">
+                        </div>
+
+                        <div class="grid grid-cols-1 gap-1">
+                            <span class="label-text">Weight Tolerance (gr)</span>
+                            <input id="atParamA6" type="number" class="input input-bordered" step="0.001" value="0.03">
+                        </div>
+
+                        <div class="grid grid-cols-1 gap-1">
+                            <span class="label-text">Time Tolerance (s)</span>
+                            <input id="atParamA7" type="number" class="input input-bordered" step="0.01" value="0.35">
+                        </div>
+
+                        <div class="grid grid-cols-1 gap-1">
+                            <span class="label-text">Auto-Apply Best PID</span>
+                            <select id="atParamA8" class="select select-bordered">
+                                <option value="true">Yes</option>
+                                <option value="false">No</option>
+                            </select>
+                        </div>
+
+                        <div class="grid grid-cols-1 gap-1">
+                            <span class="label-text">Save to EEPROM</span>
+                            <select id="atParamEE" class="select select-bordered">
+                                <option value="true">Yes</option>
+                                <option value="false">No</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Start / Cancel buttons -->
+                <div class="grid grid-cols-2 gap-2 mt-2">
+                    <button id="autotuneStartBtn" class="btn btn-primary btn-lg" onclick="autotuneStart()">Start</button>
+                    <button id="autotuneCancelBtn" class="btn btn-warning btn-lg" onclick="autotuneCancel()" disabled="disabled">Cancel</button>
+                </div>
+
+                <div class="divider">General Control</div>
+                <div class="grid grid-cols-1 gap-2">
+                    <button class="btn btn-neutral" onclick="scaleForceZero()">Scale Zero</button>
+                    <div class="grid grid-cols-2 gap-2">
+                        <button class="btn btn-neutral" onclick="servoGateSetState(2)">Gate Open</button>
+                        <button class="btn btn-neutral" onclick="servoGateSetState(1)">Gate Close</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
     <!-- The Settings Page -->
     <section id="sectionSettings" style="display: none;">
         <div class="drawer">
@@ -750,10 +890,16 @@
         </svg>
         <span class="text-sm text-gray-500 dark:text-gray-400 group-hover:text-blue-600 dark:group-hover:text-blue-500">Settings</span>
     </button>
+    <button id="autotuneNavButton" onclick="onNavButtonClicked('autotune')">
+        <svg class="w-6 h-6 text-gray-800 dark:text-white" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="none" viewBox="0 0 24 24">
+            <path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"/>
+        </svg>
+        <span class="text-sm text-gray-500 dark:text-gray-400 group-hover:text-blue-600 dark:group-hover:text-blue-500">Autotune</span>
+    </button>
     <button id="purgeNavButton" onclick="onNavButtonClicked('purge')">
         <svg class="w-6 h-6 text-gray-800 dark:text-white" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="none" viewBox="0 0 24 24">
             <path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 12H4m12 0-4 4m4-4-4-4m3-4h2a3 3 0 0 1 3 3v10a3 3 0 0 1-3 3h-2"/>
-          </svg>          
+          </svg>
         <span class="text-sm text-gray-500 dark:text-gray-400 group-hover:text-blue-600 dark:group-hover:text-blue-500">Purge</span>
     </button>
 </div>
@@ -1223,40 +1369,52 @@
         const sectionTricklerCleanUpMode = document.getElementById("sectionTricklerCleanUpMode");
 
         const sectionSettings = document.getElementById("sectionSettings");
+        const sectionAutotune = document.getElementById("sectionAutotune");
 
         const settingsNavButton = document.getElementById("settingsNavButton")
         const purgeNavButton = document.getElementById("purgeNavButton");
         const tricklerNavButton = document.getElementById("tricklerNavButton");
+        const autotuneNavButton = document.getElementById("autotuneNavButton");
+
+        // Hide all sections first
+        sectionTrickler.style.display = "none";
+        sectionSettings.style.display = "none";
+        sectionAutotune.style.display = "none";
+
+        // Deactivate all nav buttons
+        tricklerNavButton.classList.remove("active");
+        settingsNavButton.classList.remove("active");
+        purgeNavButton.classList.remove("active");
+        autotuneNavButton.classList.remove("active");
+
+        // Stop autotune polling when leaving the page
+        if (button !== "autotune") {
+            clearTimeout(autotunePollTimeoutId);
+        }
 
         switch (button) {
             case "trickler":
                 enterCleanUpMode(false);
 
                 // Section control
-                sectionSettings.style.display = "none";
                 sectionTrickler.style.display = "block";
                 sectionTricklerChargeMode.style.display = "block";
                 sectionTricklerCleanUpMode.style.display = "none";
 
                 // Button active control
-                settingsNavButton.classList.remove("active");
-                purgeNavButton.classList.remove("active");
                 tricklerNavButton.classList.add("active");
 
                 // Restart
                 _restartPoll();
                 break;
             case "purge":
-                sectionSettings.style.display = "none";
                 sectionTrickler.style.display = "block";
                 sectionTricklerChargeMode.style.display = "none";
                 sectionTricklerCleanUpMode.style.display = "block";
 
                 // Button active control
-                settingsNavButton.classList.remove("active");
-                tricklerNavButton.classList.remove("active");
                 purgeNavButton.classList.add("active");
-                
+
                 // Restart
                 _restartPoll();
 
@@ -1267,12 +1425,9 @@
                 enterCleanUpMode(true);
                 break;
             case "settings":
-                sectionTrickler.style.display = "none";
                 sectionSettings.style.display = "block";
 
                 // Button active control
-                tricklerNavButton.classList.remove("active");
-                purgeNavButton.classList.remove("active");
                 settingsNavButton.classList.add("active");
 
                 // Remove polling event
@@ -1280,7 +1435,21 @@
 
                 // Load the first settings
                 onSettingsLinkClicked("settings-scale");
-                
+
+                break;
+            case "autotune":
+                enterCleanUpMode(false);
+
+                sectionAutotune.style.display = "block";
+
+                // Button active control
+                autotuneNavButton.classList.add("active");
+
+                // Remove charge mode polling
+                clearTimeout(pollSetTimeoutId);
+
+                // Start autotune status polling
+                _restartAutotunePoll();
                 break;
             default:
                 break;
@@ -1660,6 +1829,202 @@
             reader.readAsText(file);
         }
         input.click();
+    }
+
+    // ===== Autotune Functions =====
+    const AutotuneState = Object.freeze({
+        IDLE: 0,
+        RUNNING: 1,
+        DONE: 2,
+        ERROR: 3,
+    });
+
+    const AutotuneStage = Object.freeze({
+        NONE: 0,
+        COARSE: 1,
+        FINE: 2,
+    });
+
+    const AutotuneSub = Object.freeze({
+        IDLE: 0,
+        DISPENSING: 1,
+        REMOVE_CUP: 2,
+        RETURN_CUP: 3,
+        STABILIZING: 4,
+    });
+
+    var autotunePollTimeoutId;
+
+    function autotuneStart() {
+        const a1 = document.getElementById("atParamA1").value;
+        const a2 = document.getElementById("atParamA2").value;
+        const a3 = document.getElementById("atParamA3").value;
+        const a4 = document.getElementById("atParamA4").value;
+        const a5 = document.getElementById("atParamA5").value;
+        const a6 = document.getElementById("atParamA6").value;
+        const a7 = document.getElementById("atParamA7").value;
+        const a8 = document.getElementById("atParamA8").value;
+        const ee = document.getElementById("atParamEE").value;
+
+        const uri = `/rest/autotune_coarse?a0=true&a1=${encodeURIComponent(a1)}&a2=${encodeURIComponent(a2)}&a3=${encodeURIComponent(a3)}&a4=${encodeURIComponent(a4)}&a5=${encodeURIComponent(a5)}&a6=${encodeURIComponent(a6)}&a7=${encodeURIComponent(a7)}&a8=${encodeURIComponent(a8)}&ee=${encodeURIComponent(ee)}`;
+
+        fetch(uri)
+        .then(response => response.json())
+        .then(data => {
+            _restartAutotunePoll();
+        })
+        .catch(error => {
+            console.error("Error starting autotune", error);
+        });
+    }
+
+    function autotuneCancel() {
+        const uri = `/rest/autotune_coarse?ca=true`;
+        fetch(uri)
+        .then(response => response.json())
+        .then(data => {
+            _restartAutotunePoll();
+        })
+        .catch(error => {
+            console.error("Error canceling autotune", error);
+        });
+    }
+
+    function _restartAutotunePoll() {
+        clearTimeout(autotunePollTimeoutId);
+        autotunePollTimeoutId = setTimeout(pollAutotuneStatus, 0);
+    }
+
+    function _setAutotuneStepWidget(state, stage) {
+        const stepIdle = document.getElementById("autotuneStepIdle");
+        const stepCoarse = document.getElementById("autotuneStepCoarse");
+        const stepFine = document.getElementById("autotuneStepFine");
+        const stepDone = document.getElementById("autotuneStepDone");
+
+        stepIdle.className = "step";
+        stepCoarse.className = "step";
+        stepFine.className = "step";
+        stepDone.className = "step";
+
+        if (state == AutotuneState.IDLE) {
+            stepIdle.classList.add("step-primary");
+        } else if (state == AutotuneState.RUNNING) {
+            stepIdle.classList.add("step-primary");
+            if (stage >= AutotuneStage.COARSE) stepCoarse.classList.add("step-primary");
+            if (stage >= AutotuneStage.FINE) stepFine.classList.add("step-primary");
+        } else if (state == AutotuneState.DONE) {
+            stepIdle.classList.add("step-primary");
+            stepCoarse.classList.add("step-primary");
+            stepFine.classList.add("step-primary");
+            stepDone.classList.add("step-primary");
+        } else if (state == AutotuneState.ERROR) {
+            stepIdle.classList.add("step-primary");
+            if (stage >= AutotuneStage.COARSE) stepCoarse.classList.add("step-error");
+            if (stage >= AutotuneStage.FINE) stepFine.classList.add("step-error");
+            stepDone.classList.add("step-error");
+            stepDone.textContent = "Error";
+        }
+
+        if (state != AutotuneState.ERROR) {
+            stepDone.textContent = "Done";
+        }
+    }
+
+    function _setAutotuneSubWidget(substatus) {
+        const subDispensing = document.getElementById("autotuneSubDispensing");
+        const subRemoveCup = document.getElementById("autotuneSubRemoveCup");
+        const subReturnCup = document.getElementById("autotuneSubReturnCup");
+        const subStabilizing = document.getElementById("autotuneSubStabilizing");
+
+        subDispensing.className = "step";
+        subRemoveCup.className = "step";
+        subReturnCup.className = "step";
+        subStabilizing.className = "step";
+
+        if (substatus >= AutotuneSub.DISPENSING) subDispensing.classList.add("step-primary");
+        if (substatus >= AutotuneSub.REMOVE_CUP) subRemoveCup.classList.add("step-primary");
+        if (substatus >= AutotuneSub.RETURN_CUP) subReturnCup.classList.add("step-primary");
+        if (substatus >= AutotuneSub.STABILIZING) subStabilizing.classList.add("step-primary");
+    }
+
+    function pollAutotuneStatus() {
+        fetch("/rest/autotune_coarse")
+        .then(response => response.json())
+        .then(data => {
+            const state = data["state"];
+            const stage = data["stage"];
+            const substatus = data["substatus"] || 0;
+            const progress = data["progress"] || 0;
+            const runsDone = data["runs_done"] || 0;
+            const runsTotal = data["runs_total"] || 0;
+            const msg = data["msg"] || "";
+
+            const statusPanel = document.getElementById("autotuneStatusPanel");
+            const startBtn = document.getElementById("autotuneStartBtn");
+            const cancelBtn = document.getElementById("autotuneCancelBtn");
+
+            // Show status panel when not idle
+            if (state != AutotuneState.IDLE) {
+                statusPanel.style.display = "block";
+            } else {
+                statusPanel.style.display = "none";
+            }
+
+            // Button state
+            if (state == AutotuneState.RUNNING) {
+                startBtn.disabled = true;
+                cancelBtn.disabled = false;
+            } else {
+                startBtn.disabled = false;
+                cancelBtn.disabled = true;
+            }
+
+            // Steps widget
+            _setAutotuneStepWidget(state, stage);
+
+            // Cup cycle substatus widget
+            _setAutotuneSubWidget(state == AutotuneState.RUNNING ? substatus : AutotuneSub.IDLE);
+
+            // Progress
+            document.getElementById("autotuneProgressBar").value = progress;
+            document.getElementById("autotuneProgressText").textContent = progress.toFixed(1) + "%";
+            document.getElementById("autotuneRunText").textContent = runsDone + "/" + runsTotal;
+
+            // Message banner
+            const banner = document.getElementById("autotuneMessageBanner");
+            const msgText = document.getElementById("autotuneMessageText");
+            msgText.textContent = msg;
+            if (state == AutotuneState.ERROR) {
+                banner.className = "alert alert-error mb-2";
+            } else if (state == AutotuneState.DONE) {
+                banner.className = "alert alert-success mb-2";
+            } else {
+                banner.className = "alert mb-2";
+            }
+
+            // PID values
+            document.getElementById("autotuneActiveKp").textContent = (data["active_kp"] || 0).toFixed(5);
+            document.getElementById("autotuneActiveKd").textContent = (data["active_kd"] || 0).toFixed(5);
+
+            // Best coarse
+            document.getElementById("atCoarseBestKp").textContent = (data["coarse_best_kp"] || 0).toFixed(5);
+            document.getElementById("atCoarseBestKd").textContent = (data["coarse_best_kd"] || 0).toFixed(5);
+            document.getElementById("atCoarseBestWErr").textContent = (data["coarse_best_abs_err"] || 0).toFixed(3);
+            document.getElementById("atCoarseBestTErr").textContent = (data["coarse_best_time_err"] || 0).toFixed(3);
+
+            // Best fine
+            document.getElementById("atFineBestKp").textContent = (data["fine_best_kp"] || 0).toFixed(5);
+            document.getElementById("atFineBestKd").textContent = (data["fine_best_kd"] || 0).toFixed(5);
+            document.getElementById("atFineBestWErr").textContent = (data["fine_best_abs_err"] || 0).toFixed(3);
+            document.getElementById("atFineBestTErr").textContent = (data["fine_best_time_err"] || 0).toFixed(3);
+        })
+        .catch(error => {
+            console.error("Error polling autotune status", error);
+        })
+        .finally(() => {
+            clearTimeout(autotunePollTimeoutId);
+            autotunePollTimeoutId = setTimeout(pollAutotuneStatus, 1000);
+        });
     }
 
     // Start the long polling process when the page loads
