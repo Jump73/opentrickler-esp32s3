@@ -92,6 +92,7 @@ static void init_model_bins(flow_model_single_t *m, const float *bins)
     m->num_points = FLOW_TABLE_POINTS;
     m->transport_delay_ms = 0.0f;
     m->inertia_factor_s = 0.0f;
+    m->last_quality = 0.0f;
     for (int i = 0; i < FLOW_TABLE_POINTS; i++) {
         m->points[i].speed_rps = bins[i];
         m->points[i].flow_rate_gn_s = 0.0f;
@@ -260,6 +261,11 @@ esp_err_t flow_model_analyze_and_update(uint8_t profile_idx)
     // Step 1-3: Compute flow rates, filter, assign to bins
     float start_weight = s[0].weight_gn;
     int valid_obs = 0;
+    int total_candidates = 0;
+    int rejected = 0;
+
+    // Spin-up rejection threshold: first 100ms after motor start
+    const uint32_t SPINUP_MS = 100;
 
     for (int i = 0; i < n - 1; i++) {
         float dt = (float)(s[i + 1].timestamp_ms - s[i].timestamp_ms) / 1000.0f;
@@ -267,18 +273,22 @@ esp_err_t flow_model_analyze_and_update(uint8_t profile_idx)
         float avg_speed = (s[i].speed_rps + s[i + 1].speed_rps) * 0.5f;
         float speed_change = fabsf(s[i + 1].speed_rps - s[i].speed_rps);
 
-        // Filter out bad observations
-        if (dt < 0.005f) continue;          // Too close in time
-        if (dw < 0.0f) continue;            // Weight decreased (noise)
-        if (speed_change > 0.5f) continue;  // Speed transient
-        if (avg_speed < 0.01f) continue;    // Motor essentially stopped
+        if (avg_speed < 0.01f) continue;    // Motor essentially stopped (not a candidate)
+        total_candidates++;
 
-        // Reject braking phase: when speed is decreasing, powder in-flight
-        // from higher speed contaminates the current speed bin with low flow
-        if (i > 0 && s[i].speed_rps < s[i - 1].speed_rps - 0.02f) continue;
+        // Basic filters
+        if (dt < 0.005f) { rejected++; continue; }           // Too close in time
+        if (dw < 0.0f) { rejected++; continue; }             // Weight decreased (noise)
+
+        // Extended filters (Phase 1b)
+        if (s[i].timestamp_ms < SPINUP_MS) { rejected++; continue; }  // Spin-up phase
+        if (speed_change > 0.1f) { rejected++; continue; }            // Non-steady speed
+
+        // Braking filter: speed decreasing → in-flight powder contaminates bin
+        if (i > 0 && s[i].speed_rps < s[i - 1].speed_rps - 0.02f) { rejected++; continue; }
 
         float flow_rate = dw / dt;
-        if (flow_rate > 50.0f) continue;    // Physically impossible
+        if (flow_rate > 50.0f) { rejected++; continue; }     // Physically impossible
 
         // Find nearest bin
         int bin = find_nearest_bin(bins, FLOW_TABLE_POINTS, avg_speed);
@@ -293,7 +303,7 @@ esp_err_t flow_model_analyze_and_update(uint8_t profile_idx)
             bin_half_width = fminf(bins[bin] - bins[bin - 1], bins[bin + 1] - bins[bin]) * 0.5f;
         }
 
-        if (fabsf(avg_speed - bins[bin]) > bin_half_width) continue;
+        if (fabsf(avg_speed - bins[bin]) > bin_half_width) { rejected++; continue; }
 
         // Add to bin accumulator
         if (s_bin_obs[bin].count < BIN_OBS_MAX) {
@@ -302,10 +312,37 @@ esp_err_t flow_model_analyze_and_update(uint8_t profile_idx)
         }
     }
 
-    ESP_LOGI(TAG, "Analysis: %d samples, %d valid observations, motor=%s",
-             n, valid_obs, motor == 0 ? "COARSE" : "FINE");
+    // Compute quality score (0..1) for this dispense
+    // Measures how "clean" the data was: low rejection ratio + low scale noise
+    float quality = 1.0f;
+    if (total_candidates > 0) {
+        quality -= 0.3f * ((float)rejected / (float)total_candidates);
+    }
+    // Settling noise: RMS of weight differences in post-stop samples (speed=0)
+    float settling_rms = 0.0f;
+    int settling_count = 0;
+    for (int i = 1; i < n; i++) {
+        if (s[i].speed_rps < 0.01f && s[i - 1].speed_rps < 0.01f) {
+            float dw = s[i].weight_gn - s[i - 1].weight_gn;
+            settling_rms += dw * dw;
+            settling_count++;
+        }
+    }
+    if (settling_count > 0) {
+        settling_rms = sqrtf(settling_rms / (float)settling_count);
+        // Penalize if noise > 0.04 gn RMS (threshold for noisy scale)
+        float noise_penalty = settling_rms / 0.04f;
+        if (noise_penalty > 1.0f) noise_penalty = 1.0f;
+        quality -= 0.3f * noise_penalty;
+    }
+    if (quality < 0.05f) quality = 0.05f;
+    if (quality > 1.0f) quality = 1.0f;
+    model->last_quality = quality;
 
-    // Step 4-5: Compute median per bin and EMA merge
+    ESP_LOGI(TAG, "Analysis: %d samples, %d candidates, %d rejected, %d valid, quality=%.2f, motor=%s",
+             n, total_candidates, rejected, valid_obs, quality, motor == 0 ? "COARSE" : "FINE");
+
+    // Step 4-6: Compute median per bin and quality-weighted EMA merge
     int bins_updated = 0;
     for (int b = 0; b < FLOW_TABLE_POINTS; b++) {
         if (s_bin_obs[b].count < 3) continue;  // Need at least 3 observations
@@ -314,23 +351,29 @@ esp_err_t flow_model_analyze_and_update(uint8_t profile_idx)
         sort_floats(s_bin_obs[b].values, s_bin_obs[b].count);
         float median = s_bin_obs[b].values[s_bin_obs[b].count / 2];
 
+        // Quality-weighted alpha: bad dispenses barely affect the model
+        float obs_factor = (float)s_bin_obs[b].count / 10.0f;
+        if (obs_factor < 0.1f) obs_factor = 0.1f;
+        if (obs_factor > 1.0f) obs_factor = 1.0f;
+        float alpha = EMA_ALPHA * quality * obs_factor;
+
         flow_point_t *pt = &model->points[b];
         if (pt->sample_count == 0) {
             // First observation — take directly
             pt->flow_rate_gn_s = median;
         } else {
-            // EMA merge
-            pt->flow_rate_gn_s = (1.0f - EMA_ALPHA) * pt->flow_rate_gn_s + EMA_ALPHA * median;
+            // Quality-weighted EMA merge
+            pt->flow_rate_gn_s = (1.0f - alpha) * pt->flow_rate_gn_s + alpha * median;
         }
         pt->sample_count++;
         bins_updated++;
 
-        ESP_LOGI(TAG, "  bin[%d] speed=%.2f: flow=%.4f gn/s (median=%.4f, n=%d, total=%d)",
+        ESP_LOGI(TAG, "  bin[%d] speed=%.2f: flow=%.4f gn/s (median=%.4f, n=%d, alpha=%.3f, total=%d)",
                  b, pt->speed_rps, pt->flow_rate_gn_s, median,
-                 s_bin_obs[b].count, pt->sample_count);
+                 s_bin_obs[b].count, alpha, pt->sample_count);
     }
 
-    // Step 6: Transport delay
+    // Step 7: Transport delay (quality-weighted EMA)
     float delay_ms = 0.0f;
     for (int i = 1; i < n; i++) {
         if (s[i].weight_gn > start_weight + 0.02f) {
@@ -342,12 +385,13 @@ esp_err_t flow_model_analyze_and_update(uint8_t profile_idx)
         if (model->transport_delay_ms < 1.0f) {
             model->transport_delay_ms = delay_ms;
         } else {
-            model->transport_delay_ms = (1.0f - EMA_ALPHA) * model->transport_delay_ms + EMA_ALPHA * delay_ms;
+            float delay_alpha = EMA_ALPHA * quality;
+            model->transport_delay_ms = (1.0f - delay_alpha) * model->transport_delay_ms + delay_alpha * delay_ms;
         }
         ESP_LOGI(TAG, "  transport_delay=%.1f ms", model->transport_delay_ms);
     }
 
-    // Step 7: Inertia (weight gained after motor stop)
+    // Step 8: Inertia (weight gained after motor stop, quality-weighted EMA)
     if (s_recording.stop_tick > 0) {
         uint32_t stop_rel_ms = s_recording.stop_tick - s_recording.start_tick;
 
@@ -385,7 +429,8 @@ esp_err_t flow_model_analyze_and_update(uint8_t profile_idx)
                     if (model->inertia_factor_s < 0.001f) {
                         model->inertia_factor_s = inertia_s;
                     } else {
-                        model->inertia_factor_s = (1.0f - EMA_ALPHA) * model->inertia_factor_s + EMA_ALPHA * inertia_s;
+                        float inertia_alpha = EMA_ALPHA * quality;
+                        model->inertia_factor_s = (1.0f - inertia_alpha) * model->inertia_factor_s + inertia_alpha * inertia_s;
                     }
                     ESP_LOGI(TAG, "  inertia=%.3f s (overshoot=%.3f gn, pre_flow=%.3f gn/s)",
                              model->inertia_factor_s, overshoot_gn, pre_stop_flow);
@@ -481,6 +526,21 @@ float flow_model_get_inertia(uint8_t profile_idx, uint8_t motor)
 {
     flow_model_single_t *m = get_single_model(profile_idx, motor);
     return m ? m->inertia_factor_s : 0.0f;
+}
+
+bool flow_model_is_trusted(uint8_t profile_idx, uint8_t motor)
+{
+    flow_model_single_t *m = get_single_model(profile_idx, motor);
+    if (!m) return false;
+
+    // Model is trusted when >=3 bins have sample_count >= 5
+    int trusted_bins = 0;
+    for (int i = 0; i < m->num_points; i++) {
+        if (m->points[i].sample_count >= 5) {
+            trusted_bins++;
+        }
+    }
+    return trusted_bins >= 3;
 }
 
 esp_err_t flow_model_get(uint8_t profile_idx, flow_model_t *out)

@@ -6,7 +6,7 @@ flow rate (gn/s) from every dispense. It builds a piecewise-linear lookup table 
 persisted in NVS per profile. This is the foundation for feedforward control (phase 2)
 and analytical PID tuning (phase 3).
 
-## Status: Phase 1 COMPLETE, Phase 1b TODO, Phase 2a-c REVERTED, Phase 2d TODO
+## Status: Phase 1+1b COMPLETE, Phase 2a-c REVERTED, Phase 2d TODO
 
 Phase 1 (recording + model building) is fully implemented and tested.
 - Flow model component created and integrated
@@ -18,10 +18,15 @@ Phase 1 (recording + model building) is fully implemented and tested.
 - Transport delay measured (coarse ~600ms, fine ~70-80ms)
 - Pure PD control active (no feedforward), model learns in background
 
-Phase 1b (model quality improvements) — TODO:
-- Quality-weighted EMA (bad dispenses have less impact on model)
-- Extended filters: spin-up rejection, non-steady rejection
-- Per-bin confidence tracking with `trusted` flag
+Phase 1b (model quality improvements) — COMPLETE:
+- Quality-weighted EMA: alpha = BASE_ALPHA * quality * clamp(n_obs/10, 0.1..1.0)
+- Spin-up filter: rejects first 100ms after motor start
+- Non-steady filter: rejects samples with |delta_speed| > 0.1 RPS
+- Quality score (0..1) computed from rejection ratio + settling noise RMS
+- Quality-weighted EMA also applied to transport_delay and inertia
+- Per-bin confidence: `flow_model_is_trusted()` returns true when ≥3 bins have ≥5 dispenses
+- `last_quality` field persisted per motor in NVS
+- FLOW_MODEL_VERSION bumped to 2 (old NVS data auto-resets on first boot)
 
 ## Architecture
 
@@ -100,6 +105,9 @@ float flow_model_get_inertia(uint8_t profile_idx, uint8_t motor);
 esp_err_t flow_model_save(uint8_t profile_idx);
 esp_err_t flow_model_load(uint8_t profile_idx);
 
+// Confidence query — true when ≥3 bins have sample_count ≥ 5
+bool flow_model_is_trusted(uint8_t profile_idx, uint8_t motor);
+
 // Debug
 esp_err_t flow_model_get(uint8_t profile_idx, flow_model_t *out);
 ```
@@ -151,7 +159,9 @@ esp_err_t flow_model_get(uint8_t profile_idx, flow_model_t *out);
 ### Dynamic parameters (steps 7-8)
 
 7. **Transport delay**: time from record_start to first delta_weight > 0.02 gn
+   — quality-weighted EMA: `alpha = BASE_ALPHA * quality`
 8. **Inertia**: weight gained after motor stop / pre-stop flow rate
+   — quality-weighted EMA: `alpha = BASE_ALPHA * quality`
    — requires post-stop samples (10 readings with speed=0 after motor off)
    — `record_stop()` only marks stop_tick, keeps recording active
    — `analyze_and_update()` ends recording
@@ -299,15 +309,15 @@ Only activate when `model_trusted = true` for the active motor.
 Reset to default when user runs autotune (fresh start).
 
 ### Current state summary
-- **Active**: flow model self-learning (records every dispense, updates model in NVS)
-- **TODO**: Phase 1b — quality-weighted EMA, extended filters, per-bin confidence
+- **Active**: flow model self-learning with quality-weighted EMA + extended filters
+- **Complete**: Phase 1 + 1b — recording, model building, quality scoring, confidence tracking
 - **Reverted**: inertia-aware coarse stop (Phase 2a) — overwrites user-tuned thresholds
 - **Rejected**: inertia-aware fine stop (Phase 2b) — too complex for marginal gain
-- **TODO**: auto max_speed limit (Phase 2d) — first safe active adaptation (requires 1b)
-- **Future**: feedforward speed (Phase 2c) — needs careful redesign (requires 1b + 2d stable)
+- **TODO**: auto max_speed limit (Phase 2d) — first safe active adaptation
+- **Future**: feedforward speed (Phase 2c) — needs careful redesign (requires 2d stable)
 - PD control unchanged with fixed thresholds, precision is priority over speed
 - User preference: precision > speed. Overshoot (przesyp) = bad, undershoot = acceptable
-- Implementation order: 1b → 2d → 2c → 3
+- Next step: Phase 2d, then 2c → 3
 
 ## Phase 3: Analytical PD tuning (future)
 Use the flow model's slope (d_flow/d_speed) at the operating point to analytically
