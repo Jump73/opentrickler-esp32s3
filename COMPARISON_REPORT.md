@@ -1,6 +1,6 @@
 # OpenTrickler ESP32-S3 Port - Comprehensive Comparison Report
 
-**Report Date:** 2026-02-15 (Updated)
+**Report Date:** 2026-02-17 (Updated)
 **Original Project Location:** `C:\Users\kdzia\OpenTrickler_org-EAMARS`
 **ESP32-S3 Port Location:** `C:\Users\kdzia\ESPRESS\opentrickler-esp32s3`
 
@@ -54,7 +54,7 @@ The port follows these specific implementation requirements:
 
 This report compares the original OpenTrickler project (Raspberry Pi Pico W) with the ESP32-S3 port, documenting what functionality exists, what's complete, what's partially implemented, and what's missing.
 
-**Estimated Completion:** ~80-85% of original functionality ported. Major milestones since last report: **Web UI charge mode control with display sync**, **scale tare reliability fix (queued action pattern)**, **faster G&G JJB polling (~20ms cycle vs original 250ms)**, **charge result feedback synchronized across LED, display, and web UI**, and **embedded HTML regeneration pipeline fixed**. Both motors operate correctly with MCPWM + acceleration ramp + PID control from profile parameters. GNG JJB scale reads weight with optimized polling (no artificial delay, frame-driven timing). TMC2209 UART uses separate TX/RX pins (GPIO15/GPIO16) - both motors work, further testing needed to verify full UART register access.
+**Estimated Completion:** ~85-90% of original functionality ported. Major milestones since last report: **(1+1)-ES evolutionary autotuning** (Kp/Kd optimization for coarse and fine motors), **flow model component** (self-learning motor-to-weight correlation with quality-weighted EMA, extended filters, and per-bin confidence tracking), **charge history table**, and **pure PD control** (Ki removed — not needed). Both motors operate correctly with MCPWM + acceleration ramp + PD control from profile parameters. GNG JJB scale reads weight with optimized polling (no artificial delay, frame-driven timing). TMC2209 UART uses separate TX/RX pins (GPIO15/GPIO16) - both motors work, further testing needed to verify full UART register access.
 
 ---
 
@@ -65,7 +65,7 @@ This report compares the original OpenTrickler project (Raspberry Pi Pico W) wit
 | Guideline | Status | Implementation Notes |
 |-----------|--------|---------------------|
 | **Replace u8g2 with LVGL** | ✅ **Complete** | LVGL v9.2.2 integrated, 12-screen menu system, custom bitmap fonts |
-| **Replace PIO motors with PWM** | ✅ **Complete** | MCPWM variable-speed + acceleration ramp + PID control working |
+| **Replace PIO motors with PWM** | ✅ **Complete** | MCPWM variable-speed + acceleration ramp + PD control working |
 | **Replace PIO LEDs with led_strip** | ✅ **Complete** | espressif/led_strip v2.5.5, RMT-based WS2812B on GPIO9 |
 | **Use ESP-IDF RESTful Server** | ⏳ **Custom Implementation** | Custom REST handler system (works, but not ESP-IDF example) |
 | **Add ESP Provisioning Tool** | ❌ **Not Started** | Using custom wizard, no BLE/SoftAP provisioning |
@@ -85,7 +85,7 @@ This report compares the original OpenTrickler project (Raspberry Pi Pico W) wit
   - Managed component: `lvgl/lvgl` v9.2.2
 
 #### 2. Motor Control (PIO → PWM)
-- **Current State:** ✅ MCPWM variable-speed STEP generation + acceleration ramp + PID control
+- **Current State:** ✅ MCPWM variable-speed STEP generation + acceleration ramp + PD control
 - **Original:** PIO state machines for precise timing
 - **Target:** MCPWM with software timing ← **DONE**
 - **Implementation:**
@@ -161,7 +161,7 @@ This report compares the original OpenTrickler project (Raspberry Pi Pico W) wit
 | **Acceleration Control** | ✅ PID-based velocity ramping | ✅ Software acceleration ramp (coarse 10 rev/s², fine 5 rev/s²) | ✅ **Complete** |
 | **Motor Config (NVS)** | ✅ Full config saved to EEPROM | ✅ Full config saved to NVS (CONFIG_VERSION=3) | ✅ **Complete** |
 | **MCPWM Group Separation** | N/A (PIO) | ✅ Coarse=MCPWM_GROUP1, Fine=MCPWM_GROUP0 | ✅ **Complete** |
-| **PID Speed Control** | ✅ Profile-based PID | ✅ Profile-based PID (kp, ki, kd per motor) | ✅ **Complete** |
+| **PD Speed Control** | ✅ Profile-based PID | ✅ Profile-based PD (kp, kd per motor; ki unused) | ✅ **Complete** |
 
 **Implementation Files:**
 - **Original:** `src/motors.h`, `src/motors.c`, TMC library integration via PIO
@@ -177,7 +177,7 @@ This report compares the original OpenTrickler project (Raspberry Pi Pico W) wit
 - ✅ TMC UART HAL: CRC calculation, read/write datagram formatting, echo handling
 - ✅ Separate TX=GPIO15, RX=GPIO16 pin configuration (resistor network to TMC PDN_UART)
 - ✅ Both motors (coarse + fine) operate correctly with current configuration
-- ✅ PID-based dynamic speed control using profile parameters
+- ✅ PD-based dynamic speed control using profile parameters (Ki is unused)
 
 **TMC UART Status:**
 - ✅ Pin configuration changed from single-wire to separate TX (GPIO15) / RX (GPIO16)
@@ -347,9 +347,9 @@ This report compares the original OpenTrickler project (Raspberry Pi Pico W) wit
 | Feature | Original (Pico W) | ESP32-S3 Port | Status |
 |---------|-------------------|---------------|---------|
 | **State Machine** | ✅ 5 states (EXIT, WAIT_ZERO, COMPLETE, etc.) | ✅ Full state machine running | ✅ **Complete** |
-| **PID Control** | ✅ Dual PID (coarse/fine) | ✅ Profile-based PID (kp, ki, kd per motor) | ✅ **Complete** |
+| **PD Control** | ✅ Dual PID (coarse/fine) | ✅ Profile-based PD (kp, kd per motor; ki unused) | ✅ **Complete** |
 | **Weight Monitoring** | ✅ Real-time scale reading | ✅ Blocking scale measurement with semaphore | ✅ **Complete** |
-| **Motor Control** | ✅ Automatic speed adjustment | ✅ PID speed control with min/max clamping | ✅ **Complete** |
+| **Motor Control** | ✅ Automatic speed adjustment | ✅ PD speed control with min/max clamping | ✅ **Complete** |
 | **Precharge Mode** | ✅ Fast initial dispense | ✅ Configurable time and speed | ✅ **Complete** |
 | **Threshold Detection** | ✅ Coarse/fine stop thresholds | ✅ Uses charge_mode_config thresholds | ✅ **Complete** |
 | **LED Feedback** | ✅ Color indicates state | ✅ GREEN/YELLOW/RED/BLUE via NeoPixel | ✅ **Complete** |
@@ -364,9 +364,11 @@ This report compares the original OpenTrickler project (Raspberry Pi Pico W) wit
 - **ESP32-S3:** `components/charge_mode/charge_mode.c`, `components/charge_mode/include/charge_mode.h`
 
 **What Works:**
-- ✅ Full state machine: WAIT_FOR_ZERO → WAIT_FOR_COMPLETE (PID) → CUP_REMOVAL → CUP_RETURN → loop
-- ✅ Profile-based PID control: separate kp/ki/kd for coarse and fine motors
+- ✅ Full state machine: WAIT_FOR_ZERO → WAIT_FOR_COMPLETE (PD) → CUP_REMOVAL → CUP_RETURN → loop
+- ✅ Profile-based PD control: kp/kd per motor (ki field exists but unused, always 0)
 - ✅ Motor speed clamped to profile min/max flow speed limits
+- ✅ Charge history table: tracks last N dispenses with weight error and time
+- ✅ Flow model integration: records samples during dispense for offline learning
 - ✅ Coarse motor stops at `coarse_stop_threshold` (default 5.0 grains), fine continues
 - ✅ Fine motor stops at `fine_stop_threshold` (default 0.03 grains)
 - ✅ Blocking scale measurement with semaphore (200-300ms timeout)
@@ -407,12 +409,12 @@ This report compares the original OpenTrickler project (Raspberry Pi Pico W) wit
 
 ---
 
-### 3.3 Profile Management (PID Presets)
+### 3.3 Profile Management (PD Presets)
 
 | Feature | Original (Pico W) | ESP32-S3 Port | Status |
 |---------|-------------------|---------------|---------|
 | **Profile Storage** | ✅ 8 profiles in EEPROM | ✅ 8 profiles in NVS | ✅ **Complete** |
-| **PID Parameters** | ✅ Separate coarse/fine PID | ✅ Stored in NVS | ✅ **Complete** |
+| **PD Parameters** | ✅ Separate coarse/fine PID | ✅ Kp/Kd stored in NVS (Ki unused) | ✅ **Complete** |
 | **Flow Speed Limits** | ✅ Min/max speed per motor | ✅ Stored in NVS | ✅ **Complete** |
 | **Profile Selection** | ✅ Active profile tracking | ✅ Current index tracked | ✅ **Complete** |
 | **Profile Names** | ✅ 16-char custom names | ✅ 16-char names | ✅ **Complete** |
@@ -426,7 +428,64 @@ This report compares the original OpenTrickler project (Raspberry Pi Pico W) wit
 
 ---
 
-### 3.4 Menu System
+### 3.4 Autotuning
+
+| Feature | Original (Pico W) | ESP32-S3 Port | Status |
+|---------|-------------------|---------------|---------|
+| **Autotuning Algorithm** | ❌ Not in original | ✅ (1+1)-ES evolutionary Kp/Kd optimization | ✅ **New feature** |
+| **Coarse Motor Tuning** | ❌ | ✅ Adaptive mutation, weight + time fitness | ✅ **Complete** |
+| **Fine Motor Tuning** | ❌ | ✅ Sequential after coarse, same algorithm | ✅ **Complete** |
+| **Profile Auto-Save** | ❌ | ✅ Optional save of best parameters to NVS | ✅ **Complete** |
+| **REST API** | ❌ | ✅ `/rest/autotune_coarse` with poll/cancel | ✅ **Complete** |
+
+**Implementation Files:**
+- **ESP32-S3:** `components/autotune/autotune.c`
+
+**What Works:**
+- ✅ (1+1)-ES evolutionary strategy: mutate Kp/Kd, keep if fitness improves
+- ✅ Fitness function: weighted combination of weight accuracy and dispense time
+- ✅ Sequential tuning: coarse first, then fine motor
+- ✅ Configurable: target weight, target time, max trials, tolerances
+- ✅ Flow model integration: records samples during each tuning dispense
+
+---
+
+### 3.5 Flow Model (Self-Learning)
+
+| Feature | Original (Pico W) | ESP32-S3 Port | Status |
+|---------|-------------------|---------------|---------|
+| **Flow Model** | ❌ Not in original | ✅ Piecewise-linear speed→flow lookup per motor | ✅ **New feature** |
+| **Recording** | ❌ | ✅ Samples (time, speed, weight) every dispense | ✅ **Complete** |
+| **Offline Analysis** | ❌ | ✅ Flow rate computation, bin assignment, median | ✅ **Complete** |
+| **Quality-Weighted EMA** | ❌ | ✅ Adaptive alpha based on data quality | ✅ **Complete** |
+| **Extended Filters** | ❌ | ✅ Spin-up, non-steady, braking rejection | ✅ **Complete** |
+| **Transport Delay** | ❌ | ✅ Measured per motor (coarse ~600ms, fine ~70ms) | ✅ **Complete** |
+| **Inertia Factor** | ❌ | ✅ In-flight powder after motor stop | ✅ **Complete** |
+| **Confidence Tracking** | ❌ | ✅ Per-bin sample count, trusted threshold | ✅ **Complete** |
+| **NVS Persistence** | ❌ | ✅ Per-profile, survives reboot | ✅ **Complete** |
+
+**Implementation Files:**
+- **ESP32-S3:** `components/flow_model/flow_model.c`, `components/flow_model/include/flow_model.h`
+
+**What Works:**
+- ✅ Passive learning: records every dispense in charge mode and autotune
+- ✅ 12 fixed speed bins per motor, piecewise-linear interpolation
+- ✅ Quality score (0..1) from rejection ratio + settling noise RMS
+- ✅ Quality-weighted EMA: noisy dispenses barely affect the model
+- ✅ Extended filters: spin-up (100ms), non-steady (|dSpeed|>0.1), braking
+- ✅ Per-bin confidence: `flow_model_is_trusted()` gate for future adaptations
+- ✅ ~30KB RAM footprint (recording buffer + models + accumulators)
+
+**Planned (not yet implemented):**
+- Phase 2d: Auto max_speed limit (reduce speed on repeated overshoots)
+- Phase 2c: Feedforward speed control (replace P-term with model prediction)
+- Phase 3: Analytical PD tuning (compute optimal Kp/Kd from model slope)
+
+See [docs/flow_model_plan.md](docs/flow_model_plan.md) for full technical design.
+
+---
+
+### 3.6 Menu System
 
 | Feature | Original (Pico W) | ESP32-S3 Port | Status |
 |---------|-------------------|---------------|---------|
@@ -639,20 +698,22 @@ python scripts/html2header.py -f html/web_portal.html -o main/generated/web_port
 
 1. **LVGL Display + Menu System** - 12 screens with encoder navigation, per-digit weight input, real-time charge display
 2. **NeoPixel LED Driver** - RMT-based WS2812B via espressif/led_strip, charge mode color feedback, external PWM3 LED mirroring on GPIO9
-3. **Charge Mode with PID** - Full dispense cycle with profile-based PID control, precharge, over/under detection, synchronized feedback across LED/display/web UI
-4. **Motor Control (MCPWM)** - Glitch-free variable-speed STEP generation, acceleration ramp, PID speed control
+3. **Charge Mode with PD** - Full dispense cycle with profile-based PD control, precharge, over/under detection, charge history, synchronized feedback across LED/display/web UI
+4. **Motor Control (MCPWM)** - Glitch-free variable-speed STEP generation, acceleration ramp, PD speed control
 5. **Motor Direction/Enable** - GPIO control with active-low enable (TMC2209), both motors operational
 6. **GNG JJB Scale** - Optimized UART polling (~20ms cycle, frame-driven), reliable tare (queued action), blocking measurement with semaphore
 7. **Cleanup Mode** - Manual trickler with encoder speed control, reverse support, LVGL screen
 8. **WiFi Management** - STA + AP modes with auto-start logic
 9. **HTTP Server** - Serves web pages and REST API
 10. **NVS Configuration Storage** - All config modules save/load correctly (CONFIG_VERSION tracked)
-11. **Profile System** - 8 profiles with PID parameters, full CRUD via REST API
+11. **Profile System** - 8 profiles with PD parameters, full CRUD via REST API
 12. **System Control** - Reboot, save all settings, erase NVS
 13. **Web UI Pages** - Portal with charge mode control and inline result banner, wizard, display mirror HTML
 14. **REST API Endpoints** - All endpoints registered and parse parameters; charge mode state controls display via LVGL mutex
 15. **Input Encoder** - Quadrature decoding, detent detection, button debounce, LVGL integration
 16. **Web UI ↔ Display Sync** - Starting charge from web UI switches physical display to charge screen; over/under banner auto-hides on cup removal
+17. **Autotuning** - (1+1)-ES evolutionary Kp/Kd optimization, sequential coarse→fine, REST API with poll/cancel
+18. **Flow Model** - Self-learning motor-to-weight correlation, quality-weighted EMA, extended filters, per-bin confidence, NVS persistence
 
 ### ⏳ Partially Working / Needs Testing
 
@@ -718,22 +779,25 @@ Reference mapping: `PICO_W-ESP32_S3_PICO_PIN_MAPPING.md`.
 
 ## 9. Recommended Next Steps
 
-### Phase 1: Testing & Verification (Current)
-1. **TMC UART testing** - Verify register read/write with current separate TX/RX pin configuration
-2. **Scale driver testing** - Test universal parser with AND FXi, Steinberg, and other available scales
-3. **Charge mode tuning** - Fine-tune PID parameters with real powder dispensing tests
+### Phase 1: Flow Model Active Use (Current)
+1. **Phase 2d: Auto max_speed limit** - Reduce max motor speed on repeated overshoots (safe, one-directional)
+2. **TMC UART testing** - Verify register read/write with current separate TX/RX pin configuration
+3. **Scale driver testing** - Test universal parser with AND FXi, Steinberg, and other available scales
 
 ### Phase 2: Remaining Drivers
 4. **Servo gate control** - LEDC PWM servo driver for powder funnel gate
 5. **Sartorius scale driver** - Add frame structure and parser
 6. **Display buffer mirroring** - Export LVGL framebuffer for web UI `/display_buffer` endpoint
 
-### Phase 3: Polish & Extras
-7. **Button REST override** - REST API to simulate button presses for remote control
-8. **Reset button** - GPIO37 handling
-9. **Display rotation** - Configurable rotation via LVGL
-10. **External LED (PWM3)** - Mirror LED1 output
-11. **ESP Provisioning Tool** - BLE/SoftAP provisioning (optional, web wizard works)
+### Phase 3: Advanced Control (Future)
+7. **Phase 2c: Feedforward speed** - Replace P-term with model-based speed prediction
+8. **Phase 3: Analytical PD tuning** - Compute optimal Kp/Kd from flow model slope
+
+### Phase 4: Polish & Extras
+9. **Button REST override** - REST API to simulate button presses for remote control
+10. **Reset button** - GPIO37 handling
+11. **Display rotation** - Configurable rotation via LVGL
+12. **ESP Provisioning Tool** - BLE/SoftAP provisioning (optional, web wizard works)
 
 ---
 
@@ -761,9 +825,11 @@ OpenTrickler_org-EAMARS/
 ```
 opentrickler-esp32s3/
 ├── components/            # ESP-IDF components
-│   ├── charge_mode/       # ✅ Full PID state machine + motor/scale integration
+│   ├── autotune/          # ✅ (1+1)-ES evolutionary Kp/Kd autotuning
+│   ├── charge_mode/       # ✅ Full PD state machine + motor/scale integration
 │   ├── cleanup_mode/      # ✅ Manual trickler with motor control
-│   ├── motors/            # ✅ MCPWM + acceleration ramp + PID
+│   ├── flow_model/        # ✅ Self-learning speed→flow model (quality-weighted EMA)
+│   ├── motors/            # ✅ MCPWM + acceleration ramp + PD
 │   ├── tmc_drivers/       # ✅ TMC2209 lib + UART HAL (separate TX/RX)
 │   ├── scale/             # ✅ GNG JJB + universal parser for 7 models
 │   ├── scale_generic/     # ⏳ Simulator only
@@ -773,7 +839,7 @@ opentrickler-esp32s3/
 │   ├── ui_screens/        # ✅ 12 LVGL screens + bitmap fonts
 │   ├── input_encoder/     # ✅ Quadrature + button + LVGL input
 │   ├── neopixel_led/      # ✅ RMT WS2812B driver (led_strip)
-│   ├── profile/           # ✅ 8 profiles with PID parameters
+│   ├── profile/           # ✅ 8 profiles with PD parameters
 │   ├── wifi_manager/      # ✅ STA + AP modes
 │   ├── http_server/       # ✅ esp_http_server
 │   ├── rest_handlers/     # ✅ Full REST API
@@ -810,14 +876,16 @@ The ESP32-S3 port has reached a functional state across all layers:
 - ✅ Encoder input with LVGL integration
 - ❌ Servo gate not implemented
 
-**Application logic layer** - ✅ Core complete:
-- ✅ Charge mode with profile-based PID control (full dispense cycle)
+**Application logic layer** - ✅ Core complete + new features:
+- ✅ Charge mode with profile-based PD control (full dispense cycle), charge history
 - ✅ Cleanup mode with motor control and encoder speed adjustment
 - ✅ 12-screen LVGL menu system with encoder navigation
 - ✅ Per-digit weight input, over/under charge detection, precharge
 - ✅ LED status feedback (color indicates charge state)
+- ✅ (1+1)-ES evolutionary autotuning (Kp/Kd optimization, coarse→fine)
+- ✅ Flow model: self-learning speed→flow correlation with quality-weighted EMA, extended filters, per-bin confidence tracking, NVS persistence
 
-**Estimated Completion:** ~80-85% of original functionality ported. The project can physically dispense powder with PID-controlled motors, display real-time weight on the LCD, provide synchronized LED/display/web UI feedback, and be fully controlled from both the encoder menu and web UI. Scale polling is optimized for faster PID response (~20ms vs original 250ms). Remaining work: servo gate, Sartorius scale, TMC UART verification, and minor features (display rotation, REST button override, ESP provisioning).
+**Estimated Completion:** ~85-90% of original functionality ported (plus new features not in original). The project can physically dispense powder with PD-controlled motors, display real-time weight on the LCD, provide synchronized LED/display/web UI feedback, and be fully controlled from both the encoder menu and web UI. Scale polling is optimized for faster PD response (~20ms vs original 250ms). The system now includes evolutionary autotuning and a passive flow model that learns motor-to-weight correlation from every dispense. Remaining work: servo gate, Sartorius scale, TMC UART verification, and minor features (display rotation, REST button override, ESP provisioning). Next milestone: Phase 2d (auto max_speed limit based on flow model data).
 
 ---
 
@@ -833,7 +901,7 @@ The ESP32-S3 port has reached a functional state across all layers:
 - Managed components added: `lvgl/lvgl` v9.2.2, `espressif/led_strip` v2.5.5
 - LVGL uses `LV_COLOR_FORMAT_I1` (monochrome) matching ST7567 controller
 - Display buffer conversion: LVGL horizontal bit order → ST7567 vertical page format
-- Charge mode PID uses profile parameters loaded from NVS (2 presets: AR2208, AR2209 + 6 custom slots)
+- Charge mode PD uses profile parameters loaded from NVS (2 presets: AR2208, AR2209 + 6 custom slots); Ki field exists but is always 0
 - HTML→C header pipeline: edit `html/*.html`, run `python scripts/html2header.py`, rebuild firmware
 - G&G JJB scale polling: frame-driven (~20ms cycle), tare via queued `pending_action` to avoid UART collision
 - Over/under charge feedback uses `fine_stop_threshold` from config consistently across LED, display, and web UI
@@ -892,4 +960,4 @@ static void _enable_uart_rx(uart_inst_t *uart, bool state) {
 - `components/board_expansion/include/board_pins.h` - Pin definitions (TX=GPIO15, RX=GPIO16)
 - `PICO_W-ESP32_S3_PICO_PIN_MAPPING.md` - Detailed pin-to-pin mapping
 
-**Last Updated:** 2026-02-15
+**Last Updated:** 2026-02-17
