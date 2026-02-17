@@ -6,7 +6,7 @@ flow rate (gn/s) from every dispense. It builds a piecewise-linear lookup table 
 persisted in NVS per profile. This is the foundation for feedforward control (phase 2)
 and analytical PID tuning (phase 3).
 
-## Status: Phase 1 COMPLETE, Phase 2 REVERTED, model quality fixes DONE
+## Status: Phase 1 COMPLETE, Phase 2 all REVERTED, model learns passively
 
 Phase 1 (recording + model building) is fully implemented and tested.
 - Flow model component created and integrated
@@ -172,41 +172,48 @@ esp_err_t flow_model_get(uint8_t profile_idx, flow_model_t *out);
    and will not be used. All integral-related code paths are effectively dead.
    Transport delay integral suppression (Phase 2 item 3) is therefore unnecessary.
 
-## Phase 2: Feedforward control — REVERTED
+## Phase 2: Using flow model data in charge control
 
-Phase 2 feedforward was implemented and tested on hardware, then **fully reverted**
-due to model quality issues that have since been fixed.
+### Phase 2a: Inertia-aware coarse stop — REVERTED
 
-### What was implemented (and removed)
-1. **Feedforward speed**: `set_speed = ff_speed + pid_correction`
-   - Failed because FF + full PD = double counting (both map error→speed)
-   - Reduced to `ff_speed + 0.3 * pd` — still overshooting
-   - Root cause: model had garbage data (braking contamination, no inertia)
-   - Also: rate_gain too aggressive, positive feedback loop (FF→max speed→only
-     max bin gets data→model stuck at max→FF returns max)
+Implemented and tested on hardware. **Reverted** because:
+- Coarse should always stop at fixed `coarse_stop_threshold` — that's what the user tuned
+- If model underestimates flow rate → dynamic threshold drops below config → coarse runs
+  longer → overshoot. The opposite of what we want.
+- Coarse stop threshold is a handoff point to fine motor, not a precision target.
+  In-flight powder from coarse is handled by fine motor, not by adjusting the threshold.
 
-2. **Inertia-aware coarse stop**: `threshold = inertia_s * flow + margin`
-   - Concept sound but inertia was always 0 (no post-stop samples)
+### Phase 2b: Inertia-aware fine stop — REJECTED
 
-3. **Transport delay integral suppression**: Dead code since ki=0
+Attempted but rejected. Fine motor inertia stop is too complex:
+- Requires settle-wait-retry logic (stop motor, wait, check if undershoot, restart)
+- PD already handles fine motor well at low speeds
+- Fine stop stays as simple `error < fine_stop_threshold`
 
-### Lessons learned for re-implementation
-- Model needs clean data BEFORE feedforward can work (now fixed)
-- FF must replace P-term, not add to it (double counting)
-- rate_gain must stay within model's known range
-- Positive feedback loops are dangerous with self-learning models
-- Need minimum sample_count threshold before trusting FF
-- Consider ramping FF contribution gradually (0→100% over N dispenses)
+### Phase 2c: Feedforward speed — REVERTED, future work
 
-### Current state
-- All feedforward code removed from charge_mode.c
-- Pure PD control restored and working accurately (0.00-0.03gn error)
-- Flow model recording active (learning clean data in background)
-- Model quality fixes verified on hardware:
-  - Inertia: coarse ~0.2s, fine ~0.35-0.44s
-  - Braking filter active
-  - Transport delay: coarse ~600ms, fine ~70-80ms
-- **Ready for careful re-implementation** once model has accumulated enough data
+Feedforward was implemented and fully reverted due to multiple issues:
+1. **FF + PD double counting**: both map error→speed, adding them doubles the gain
+   - FF must **replace** P-term, not add to it
+2. **rate_gain too aggressive**: desired_rate exceeded model's range → max speed returned
+3. **Positive feedback loop**: FF→max speed→only max bin learns→model stuck→FF returns max
+4. **Model had garbage data**: braking contamination + inertia=0 (both now fixed)
+
+**Lessons for re-implementation:**
+- FF should replace kp*error, not add to it. kd*derivative stays as correction
+- rate_gain must be conservative and stay within model's known range
+- Need minimum `sample_count >= 5` before trusting a bin
+- Consider gradual ramp-up of FF contribution
+- Model data quality is now good (braking filter + inertia working)
+
+### Current state summary
+- **Active**: flow model self-learning (records every dispense, updates model in NVS)
+- **Reverted**: inertia-aware coarse stop (Phase 2a) — model data too unreliable
+- **Rejected**: inertia-aware fine stop (Phase 2b) — too complex
+- **Future**: feedforward speed (Phase 2c) — needs careful redesign
+- PD control unchanged with fixed thresholds, precision is priority over speed
+- User preference: precision > speed. Overshoot (przesyp) = bad, undershoot = acceptable
+- Flow model is purely passive — learns in background, no data used in control yet
 
 ## Phase 3: Analytical PD tuning (future)
 Use the flow model's slope (d_flow/d_speed) at the operating point to analytically
