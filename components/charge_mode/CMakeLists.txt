@@ -1,3 +1,3 @@
 idf_component_register(SRCS "charge_mode.c"
                        INCLUDE_DIRS "include"
-                       REQUIRES nvs_flash motors scale freertos profile neopixel_led)
+                       REQUIRES nvs_flash motors scale freertos profile neopixel_led flow_model)

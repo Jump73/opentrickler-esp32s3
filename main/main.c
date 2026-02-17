@@ -15,6 +15,7 @@
 #include "neopixel_led.h"
 #include "system_control.h"
 #include "autotune.h"
+#include "flow_model.h"
 
 // Display and LVGL
 #include "ot_pins.h"
@@ -98,6 +99,13 @@ void app_main(void)
     ret = profile_init();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Profile init failed: %s", esp_err_to_name(ret));
+        return;
+    }
+
+    ESP_LOGI(TAG, "Step 5b: Initializing flow model...");
+    ret = flow_model_init();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Flow model init failed: %s", esp_err_to_name(ret));
         return;
     }
 
@@ -252,6 +260,6 @@ void app_main(void)
     // Main loop - keep running
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(10000));
-        ESP_LOGI(TAG, "System running, WiFi connected: %d", wifi_manager_is_connected());
+        ESP_LOGD(TAG, "System running, WiFi connected: %d", wifi_manager_is_connected());
     }
 }

@@ -641,7 +641,7 @@ char* rest_charge_mode_state_handler(int num_params, char *params[], char *value
 
     charge_mode_get_runtime_state(&runtime_state);
 
-    ESP_LOGI(TAG, "Charge mode state request with %d params", num_params);
+    ESP_LOGD(TAG, "Charge mode state request with %d params", num_params);
 
     // Parse control parameters
     for (int idx = 0; idx < num_params; idx++) {

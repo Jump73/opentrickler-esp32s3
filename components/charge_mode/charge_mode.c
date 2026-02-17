@@ -11,6 +11,7 @@
 #include "motors.h"
 #include "scale.h"
 #include "profile.h"
+#include "flow_model.h"
 #include "esp_log.h"
 #include "nvs_flash.h"
 #include "nvs.h"
@@ -247,15 +248,21 @@ static void do_wait_for_complete(void)
     float fine_min_speed = fmaxf(fine_cfg.min_speed_rps,
                                   profile->fine_min_flow_speed_rps);
 
-    // PID state
-    float integral = 0.0f;
+    // PD state (ki is not used)
     float last_error = 0.0f;
     TickType_t last_sample_tick = xTaskGetTickCount();
     bool coarse_running = true;
 
+    // Flow model profile index (for recording)
+    uint8_t profile_idx = profile_get_selected_idx();
+
     // Enable coarse motor first; fine starts after coarse stops
     motor_enable(MOTOR_COARSE, true);
     motor_enable(MOTOR_FINE, false);
+
+    // Start flow model recording for coarse motor
+    flow_model_record_start(MOTOR_COARSE);
+
 
     // Reset timer
     runtime_state.elapsed_time_seconds = 0.0f;
@@ -267,6 +274,21 @@ static void do_wait_for_complete(void)
     ESP_LOGI(TAG, "PID: fine   kp=%.3f ki=%.3f kd=%.3f speed=[%.2f..%.2f]",
              profile->fine_kp, profile->fine_ki, profile->fine_kd,
              fine_min_speed, fine_max_speed);
+
+    // Log feedforward model status
+    {
+        flow_model_t fm;
+        if (flow_model_get(profile_idx, &fm) == ESP_OK) {
+            ESP_LOGI(TAG, "FF: coarse model %d pts, delay=%.0fms, inertia=%.3fs",
+                     fm.coarse.num_points, fm.coarse.transport_delay_ms,
+                     fm.coarse.inertia_factor_s);
+            ESP_LOGI(TAG, "FF: fine   model %d pts, delay=%.0fms, inertia=%.3fs",
+                     fm.fine.num_points, fm.fine.transport_delay_ms,
+                     fm.fine.inertia_factor_s);
+        } else {
+            ESP_LOGI(TAG, "FF: no model data, pure PID mode");
+        }
+    }
 
     while (!exit_requested()) {
         // Block wait for measurement
@@ -299,41 +321,59 @@ static void do_wait_for_complete(void)
             coarse_running = false;
             motor_set_speed(MOTOR_COARSE, 0);
             motor_enable(MOTOR_COARSE, false);
+
+            // Mark coarse motor stop (recording continues for inertia measurement)
+            flow_model_record_stop();
+            // Collect post-stop settling samples for inertia calculation
+            for (int i = 0; i < 10; i++) {
+                float settle_w;
+                if (scale_block_wait_for_measurement(200, &settle_w)) {
+                    flow_model_record_sample(0.0f, settle_w);
+                }
+            }
+            flow_model_analyze_and_update(profile_get_selected_idx());
+            flow_model_record_start(MOTOR_FINE);
+
             // Start fine motor now that coarse is done
             motor_enable(MOTOR_FINE, true);
-            // Reset PID state for clean fine motor start
-            integral = 0.0f;
+            // Reset PD state for fine motor
             last_error = error;
         }
 
-        // ── PID calculation ──
+        // ── PD calculation (pure, no feedforward) ──
         float elapsed_ms = (float)((current_tick - last_sample_tick) * portTICK_PERIOD_MS);
-        if (elapsed_ms < 1.0f) elapsed_ms = 1.0f;  // Guard against division by zero
-
-        integral += error;
+        if (elapsed_ms < 1.0f) elapsed_ms = 1.0f;
         float derivative = (error - last_error) / elapsed_ms;
 
+        float set_speed = 0.0f;
         if (coarse_running) {
-            // Coarse phase: only coarse motor runs
-            float coarse_p = profile->coarse_kp * error;
-            float coarse_i = profile->coarse_ki * integral;
-            float coarse_d = profile->coarse_kd * derivative;
-            float coarse_speed = fmaxf(coarse_min_speed,
-                                        fminf(coarse_p + coarse_i + coarse_d, coarse_max_speed));
-            motor_set_speed(MOTOR_COARSE, coarse_speed);
+            set_speed = profile->coarse_kp * error
+                      + profile->coarse_kd * derivative;
+            set_speed = fmaxf(coarse_min_speed, fminf(set_speed, coarse_max_speed));
+            motor_set_speed(MOTOR_COARSE, set_speed);
         } else {
-            // Fine phase: only fine motor runs
-            float fine_p = profile->fine_kp * error;
-            float fine_i = profile->fine_ki * integral;
-            float fine_d = profile->fine_kd * derivative;
-            float fine_speed = fmaxf(fine_min_speed,
-                                      fminf(fine_p + fine_i + fine_d, fine_max_speed));
-            motor_set_speed(MOTOR_FINE, fine_speed);
+            set_speed = profile->fine_kp * error
+                      + profile->fine_kd * derivative;
+            set_speed = fmaxf(fine_min_speed, fminf(set_speed, fine_max_speed));
+            motor_set_speed(MOTOR_FINE, set_speed);
         }
+
+        // Record sample for flow model
+        flow_model_record_sample(set_speed, current_weight);
 
         last_sample_tick = current_tick;
         last_error = error;
     }
+
+    // Finalize flow recording — collect settling samples for inertia
+    flow_model_record_stop();
+    for (int i = 0; i < 10; i++) {
+        float settle_w;
+        if (scale_block_wait_for_measurement(200, &settle_w)) {
+            flow_model_record_sample(0.0f, settle_w);
+        }
+    }
+    flow_model_analyze_and_update(profile_get_selected_idx());
 
     // Stop timer
     TickType_t now = xTaskGetTickCount();
@@ -375,12 +415,14 @@ static void do_wait_for_cup_removal(void)
     // Wait for scale to fully settle after motor stop
     vTaskDelay(pdMS_TO_TICKS(1000));
 
-    // Wait for cup removal: continuously update weight, LED and events.
-    // LED and events are re-evaluated with every measurement so they stay
-    // in sync with the display (which also reads runtime_state.current_weight).
+    // Wait for cup removal with smart reclassification:
+    // - Keep reclassifying while weight stays near target (powder settling)
+    // - Freeze classification when weight jumps (hand touching cup)
     ring_buf_t data_buffer;
     ring_buf_init(&data_buffer, 5);
-    uint32_t last_led_state = 0;  // track to avoid redundant LED updates
+    float classified_weight = 0.0f;
+    bool classification_frozen = false;
+    uint32_t last_led_state = 0;
 
     while (!exit_requested()) {
         TickType_t tick_start = xTaskGetTickCount();
@@ -392,44 +434,39 @@ static void do_wait_for_cup_removal(void)
         runtime_state.current_weight = measurement;
         ring_buf_push(&data_buffer, measurement);
 
-        // Continuously update LED and event based on latest weight.
-        // Powder may still settle after motors stop, so the classification
-        // can change from OK to OVER CHARGE as weight increases.
-        // Skip LED/event updates if weight dropped far below target (cup being removed).
-        float error = runtime_state.target_charge_weight - measurement;
-        bool cup_lifting = (measurement < runtime_state.target_charge_weight * 0.5f);
-
-        if (!cup_lifting) {
-            uint32_t new_led_colour;
-            uint32_t new_event;
-
-            if (error <= -charge_mode_config.fine_stop_threshold) {
-                new_event = CHARGE_MODE_EVENT_OVER_CHARGE;
-                new_led_colour = charge_mode_config.neopixel_over_charge_colour;
-            } else if (error >= charge_mode_config.fine_stop_threshold) {
-                new_event = CHARGE_MODE_EVENT_UNDER_CHARGE;
-                new_led_colour = charge_mode_config.neopixel_under_charge_colour;
+        // Reclassify only while weight is close to target (powder settling).
+        // Freeze when weight deviates by more than 1gn from last classified
+        // reading — that means user's hand is on the cup.
+        if (!classification_frozen) {
+            if (classified_weight != 0.0f &&
+                fabsf(measurement - classified_weight) > 1.0f) {
+                classification_frozen = true;
             } else {
-                new_event = 0;
-                new_led_colour = charge_mode_config.neopixel_normal_charge_colour;
-            }
+                classified_weight = measurement;
+                float error = runtime_state.target_charge_weight - measurement;
 
-            // Update event bits
-            runtime_state.charge_mode_event &= ~(CHARGE_MODE_EVENT_UNDER_CHARGE |
-                                                   CHARGE_MODE_EVENT_OVER_CHARGE);
-            runtime_state.charge_mode_event |= new_event;
-
-            // Update LED only when classification changes (avoid flicker)
-            if (new_led_colour != last_led_state) {
-                charge_mode_set_led(new_led_colour);
-                last_led_state = new_led_colour;
-
-                if (new_event == CHARGE_MODE_EVENT_OVER_CHARGE) {
-                    ESP_LOGW(TAG, "OVER CHARGE: weight=%.4f, error=%.4f", measurement, error);
-                } else if (new_event == CHARGE_MODE_EVENT_UNDER_CHARGE) {
-                    ESP_LOGW(TAG, "UNDER CHARGE: weight=%.4f, error=%.4f", measurement, error);
+                uint32_t new_led_colour;
+                if (error <= -charge_mode_config.fine_stop_threshold) {
+                    runtime_state.charge_mode_event = CHARGE_MODE_EVENT_OVER_CHARGE;
+                    new_led_colour = charge_mode_config.neopixel_over_charge_colour;
+                } else if (error >= charge_mode_config.fine_stop_threshold) {
+                    runtime_state.charge_mode_event = CHARGE_MODE_EVENT_UNDER_CHARGE;
+                    new_led_colour = charge_mode_config.neopixel_under_charge_colour;
                 } else {
-                    ESP_LOGI(TAG, "GOOD CHARGE: weight=%.4f, error=%.4f", measurement, error);
+                    runtime_state.charge_mode_event = 0;
+                    new_led_colour = charge_mode_config.neopixel_normal_charge_colour;
+                }
+
+                if (new_led_colour != last_led_state) {
+                    charge_mode_set_led(new_led_colour);
+                    last_led_state = new_led_colour;
+                    if (runtime_state.charge_mode_event == CHARGE_MODE_EVENT_OVER_CHARGE) {
+                        ESP_LOGW(TAG, "OVER CHARGE: weight=%.4f, error=%.4f", measurement, error);
+                    } else if (runtime_state.charge_mode_event == CHARGE_MODE_EVENT_UNDER_CHARGE) {
+                        ESP_LOGW(TAG, "UNDER CHARGE: weight=%.4f, error=%.4f", measurement, error);
+                    } else {
+                        ESP_LOGI(TAG, "GOOD CHARGE: weight=%.4f, error=%.4f", measurement, error);
+                    }
                 }
             }
         }

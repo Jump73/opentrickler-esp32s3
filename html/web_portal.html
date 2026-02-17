@@ -1379,14 +1379,18 @@
                 resultText.textContent = "";
             }
 
-            // Capture weight at transition CHARGING -> REMOVE_CUP (just finished dispensing)
-            if (_lastChargeState == ChargeModeState.CHARGING &&
-                charge_mode_state == ChargeModeState.REMOVE_CUP &&
+            // Track weight during REMOVE_CUP state (powder settling).
+            // Keep updating as long as weight stays near target (within 1gn).
+            // This captures the true settled weight, not the instant motor-stop reading.
+            if (charge_mode_state == ChargeModeState.REMOVE_CUP &&
                 charge_weight_set_point > 0 &&
                 typeof current_charge_weight === 'number' && !isNaN(current_charge_weight)) {
-                _lastRemoveCupWeight = current_charge_weight;
-                _lastRemoveCupTarget = charge_weight_set_point;
-                _lastRemoveCupTime = charge_time_seconds;
+                if (_lastRemoveCupWeight === null ||
+                    Math.abs(current_charge_weight - charge_weight_set_point) < 1.0) {
+                    _lastRemoveCupWeight = current_charge_weight;
+                    _lastRemoveCupTarget = charge_weight_set_point;
+                    _lastRemoveCupTime = charge_time_seconds;
+                }
             }
 
             // Record result at transition REMOVE_CUP -> RETURN_CUP

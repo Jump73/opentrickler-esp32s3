@@ -3,6 +3,7 @@
 #include "motors.h"
 #include "profile.h"
 #include "scale.h"
+#include "flow_model.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -258,8 +259,11 @@ static bool run_single_motor_dispense(motor_type_t motor,
         motor_enable(MOTOR_FINE, true);
     }
 
+    flow_model_record_start(motor);
+
     while (1) {
         if (s_status.state != AUTOTUNE_STATE_RUNNING) {
+            flow_model_record_stop();
             stop_all();
             return false;
         }
@@ -296,12 +300,21 @@ static bool run_single_motor_dispense(motor_type_t motor,
                 motor_set_speed(MOTOR_FINE, 0.0f);
                 motor_enable(MOTOR_FINE, false);
             }
+            flow_model_record_stop();
+            // Collect post-stop samples for inertia measurement
+            for (int si = 0; si < 10; si++) {
+                float sw;
+                if (scale_block_wait_for_measurement(200, &sw)) {
+                    flow_model_record_sample(0.0f, sw);
+                }
+            }
             // Wait for scale to settle after motor inertia
             *final_w = wait_for_settled_weight(weight, settle_timeout_ms);
             s_status.current_weight = *final_w;
             // Overshoot = how much above target the settled weight is (positive = over)
             if (*final_w > peak_weight) peak_weight = *final_w;
             *max_overshoot = peak_weight - target_weight;
+            flow_model_analyze_and_update(profile_get_selected_idx());
             return true;
         }
 
@@ -309,6 +322,7 @@ static bool run_single_motor_dispense(motor_type_t motor,
         float speed = kp * error + kd * derivative;
         speed = fmaxf(min_speed, fminf(speed, max_speed));
         motor_set_speed(motor, speed);
+        flow_model_record_sample(speed, weight);
 
         last_error = error;
         last_tick = now;
@@ -322,11 +336,20 @@ static bool run_single_motor_dispense(motor_type_t motor,
                 motor_set_speed(MOTOR_FINE, 0.0f);
                 motor_enable(MOTOR_FINE, false);
             }
+            flow_model_record_stop();
+            // Collect post-stop samples for inertia measurement
+            for (int si = 0; si < 10; si++) {
+                float sw;
+                if (scale_block_wait_for_measurement(200, &sw)) {
+                    flow_model_record_sample(0.0f, sw);
+                }
+            }
             // Wait for scale to settle after motor inertia
             *final_w = wait_for_settled_weight(weight, settle_timeout_ms);
             s_status.current_weight = *final_w;
             if (*final_w > peak_weight) peak_weight = *final_w;
             *max_overshoot = peak_weight - target_weight;
+            flow_model_analyze_and_update(profile_get_selected_idx());
             return true;
         }
     }
