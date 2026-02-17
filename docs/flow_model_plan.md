@@ -6,7 +6,7 @@ flow rate (gn/s) from every dispense. It builds a piecewise-linear lookup table 
 persisted in NVS per profile. This is the foundation for feedforward control (phase 2)
 and analytical PID tuning (phase 3).
 
-## Status: Phase 1 COMPLETE, Phase 2 all REVERTED, model learns passively
+## Status: Phase 1 COMPLETE, Phase 1b TODO, Phase 2a-c REVERTED, Phase 2d TODO
 
 Phase 1 (recording + model building) is fully implemented and tested.
 - Flow model component created and integrated
@@ -17,6 +17,11 @@ Phase 1 (recording + model building) is fully implemented and tested.
 - Inertia measurement working (coarse ~0.2s, fine ~0.35-0.44s)
 - Transport delay measured (coarse ~600ms, fine ~70-80ms)
 - Pure PD control active (no feedforward), model learns in background
+
+Phase 1b (model quality improvements) — TODO:
+- Quality-weighted EMA (bad dispenses have less impact on model)
+- Extended filters: spin-up rejection, non-steady rejection
+- Per-bin confidence tracking with `trusted` flag
 
 ## Architecture
 
@@ -57,6 +62,7 @@ typedef struct {
     uint8_t      num_points;
     float        transport_delay_ms;  // delay from motor start to first weight change
     float        inertia_factor_s;    // seconds of "in-flight" powder after motor stop
+    float        last_quality;        // quality score of last dispense (0..1)
     flow_point_t points[FLOW_TABLE_POINTS];
 } flow_model_single_t;
 
@@ -100,13 +106,50 @@ esp_err_t flow_model_get(uint8_t profile_idx, flow_model_t *out);
 
 ## Analysis algorithm (runs after each dispense)
 
+### Filtering (steps 1-3)
+
 1. **Flow rate from sample pairs**: dt = delta_time, dw = delta_weight -> flow = dw/dt
-2. **Filtering**: reject if dt<5ms, dw<0, flow>50 gn/s, |delta_speed|>0.5 (transient)
-3. **Braking filter**: reject if speed is decreasing (speed[i] < speed[i-1] - 0.02)
-   — prevents braking-phase data from contaminating high-speed bins
+2. **Basic filtering**: reject if dt<5ms, dw<0, flow>50 gn/s
+3. **Extended filtering** (Phase 1b):
+   - **Braking filter**: reject if speed is decreasing (speed[i] < speed[i-1] - 0.02)
+     — prevents braking-phase data from contaminating high-speed bins
+   - **Spin-up filter**: reject first ~100ms after motor start (transport delay window)
+     — motor and powder flow not yet established, readings are noise
+   - **Non-steady filter**: reject if |delta_speed| > 0.1 RPS between samples
+     — keeps only steady-state observations where speed ≈ constant
+     — subsumes the old |delta_speed|>0.5 transient check (tighter threshold)
+
+### Model building (steps 4-6)
+
 4. **Bin assignment**: each observation -> nearest speed bin (within half-width)
 5. **Median per bin**: from observations of this dispense (min 3 obs, noise robust)
-6. **EMA merge with model**: alpha=0.3, new_point = 0.7*old + 0.3*new
+6. **Quality-weighted EMA merge** (Phase 1b):
+   - Compute quality score (0..1) for this dispense:
+     ```
+     quality = 1.0
+     quality -= 0.3 * (rejected_count / total_candidates)  // filter rejection ratio
+     quality -= 0.3 * clamp(settling_noise_rms / 0.04, 0, 1)  // scale noise
+     quality = clamp(quality, 0.05, 1.0)
+     ```
+   - Compute adaptive alpha per bin:
+     ```
+     alpha = BASE_ALPHA * quality * clamp(n_obs / 10.0, 0.1, 1.0)
+     ```
+     where BASE_ALPHA = 0.3, n_obs = number of valid observations in this bin
+   - Merge: `flow_new = (1-alpha)*flow_old + alpha*flow_dispense`
+   - Effect: noisy dispenses (high rejection, shaky scale) barely affect the model;
+     clean dispenses with many observations update it more aggressively
+
+### Per-bin confidence (Phase 1b)
+
+- `sample_count` already tracked per bin (incremented each merge)
+- **Trusted threshold**: a bin is considered trusted when `sample_count >= 5`
+- **Model trusted**: `model_trusted = true` when ≥3 bins around the typical operating
+  speed are trusted (enough coverage to make predictions)
+- Used as gate for Phase 2d adaptations and future Phase 3
+
+### Dynamic parameters (steps 7-8)
+
 7. **Transport delay**: time from record_start to first delta_weight > 0.02 gn
 8. **Inertia**: weight gained after motor stop / pre-stop flow rate
    — requires post-stop samples (10 readings with speed=0 after motor off)
@@ -206,14 +249,65 @@ Feedforward was implemented and fully reverted due to multiple issues:
 - Consider gradual ramp-up of FF contribution
 - Model data quality is now good (braking filter + inertia working)
 
+### Phase 2d: Auto max_speed limit — TODO (safe adaptation)
+
+First **active** use of flow model data in control. Designed to be one-directional:
+only reduces speed, never increases aggressiveness. Safe by construction.
+
+**Concept**: after each dispense, check if overshoot occurred. If overshoot pattern
+persists, reduce the maximum allowed motor speed for subsequent dispenses.
+
+**Logic**:
+```
+// After dispense analysis, in charge_mode or autotune:
+if (overshoot_post_stop > OVERSHOOT_THRESHOLD) {
+    overshoot_streak++;
+} else {
+    overshoot_streak = 0;
+}
+
+if (overshoot_streak >= N_STREAK) {  // e.g. 3 consecutive overshoots
+    max_speed_rps -= SPEED_STEP;     // e.g. -0.2 RPS
+    max_speed_rps = max(max_speed_rps, MIN_SAFE_SPEED);
+    overshoot_streak = 0;
+}
+```
+
+**Properties**:
+- Only decreases max_speed, never increases → cannot cause overshoot
+- Requires N consecutive overshoots before acting → no knee-jerk reaction
+- Has a floor (MIN_SAFE_SPEED) → motor always runs fast enough to work
+- Does NOT touch coarse_stop_threshold or fine_stop_threshold (lesson from Phase 2a)
+- Does NOT touch Kp/Kd (that's Phase 3)
+
+**Optional: soft speed cap near target**:
+```
+// In PD loop, after computing speed:
+if (error < E_CAP_THRESHOLD) {  // e.g. last 2.0 gn
+    speed = min(speed, cap_speed);  // limit approach speed
+}
+```
+- `cap_speed` learned from post-stop overshoot history
+- If overshoot grows → cap decreases → gentler approach
+- Redundant with good Kp tuning, but provides extra safety layer
+- Only apply when model_trusted = true
+
+**Requires**: Phase 1b (quality/confidence) to gate activation.
+Only activate when `model_trusted = true` for the active motor.
+
+**Persistence**: max_speed_limit stored in flow_model NVS (per profile, per motor).
+Reset to default when user runs autotune (fresh start).
+
 ### Current state summary
 - **Active**: flow model self-learning (records every dispense, updates model in NVS)
-- **Reverted**: inertia-aware coarse stop (Phase 2a) — model data too unreliable
-- **Rejected**: inertia-aware fine stop (Phase 2b) — too complex
-- **Future**: feedforward speed (Phase 2c) — needs careful redesign
+- **TODO**: Phase 1b — quality-weighted EMA, extended filters, per-bin confidence
+- **Reverted**: inertia-aware coarse stop (Phase 2a) — overwrites user-tuned thresholds
+- **Rejected**: inertia-aware fine stop (Phase 2b) — too complex for marginal gain
+- **TODO**: auto max_speed limit (Phase 2d) — first safe active adaptation (requires 1b)
+- **Future**: feedforward speed (Phase 2c) — needs careful redesign (requires 1b + 2d stable)
 - PD control unchanged with fixed thresholds, precision is priority over speed
 - User preference: precision > speed. Overshoot (przesyp) = bad, undershoot = acceptable
-- Flow model is purely passive — learns in background, no data used in control yet
+- Implementation order: 1b → 2d → 2c → 3
 
 ## Phase 3: Analytical PD tuning (future)
 Use the flow model's slope (d_flow/d_speed) at the operating point to analytically
