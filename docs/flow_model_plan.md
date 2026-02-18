@@ -6,7 +6,7 @@ flow rate (gn/s) from every dispense. It builds a piecewise-linear lookup table 
 persisted in NVS per profile. This is the foundation for feedforward control (phase 2)
 and analytical PID tuning (phase 3).
 
-## Status: Phase 1+1b COMPLETE, Phase 2a-c REVERTED, Phase 2d TODO
+## Status: Phase 1+1b COMPLETE, Phase 2a-c REVERTED, Phase 2d-2f TODO
 
 Phase 1 (recording + model building) is fully implemented and tested.
 - Flow model component created and integrated
@@ -308,21 +308,288 @@ Only activate when `model_trusted = true` for the active motor.
 **Persistence**: max_speed_limit stored in flow_model NVS (per profile, per motor).
 Reset to default when user runs autotune (fresh start).
 
+### Phase 2e: Predictive fine cutoff — TODO (high-value, low-risk)
+
+First use of flow model data **inside the PD loop** for real-time control.
+Fine motor only — coarse thresholds are never modified (lesson from Phase 2a).
+
+**Concept**: instead of waiting for `error < fine_stop_threshold` (reactive),
+predict the final weight including in-flight powder and stop earlier.
+
+**Algorithm** (runs every PD iteration, ~200ms):
+```c
+// In charge_mode PD loop, fine motor phase:
+if (flow_model_is_trusted(profile_idx, MOTOR_FINE)) {
+    float flow_rate = flow_model_get_flow_rate(profile_idx, MOTOR_FINE, current_speed);
+    float inertia_s = flow_model_get_inertia(profile_idx, MOTOR_FINE);
+    float inflight_gn = flow_rate * inertia_s;
+
+    // Account for one extra loop iteration (200ms at current flow rate)
+    float loop_compensation_gn = flow_rate * 0.2f;
+
+    float predicted_final = current_weight + inflight_gn + loop_compensation_gn;
+
+    if (predicted_final >= target_weight - fine_stop_threshold) {
+        motor_set_speed(MOTOR_FINE, 0);
+        // ... normal post-stop settling
+    }
+}
+// Fallback: if model not trusted, use existing threshold-only logic (unchanged)
+```
+
+**Key design decisions**:
+- **Fine motor only**: coarse stop threshold is a handoff point, not a precision target.
+  User tunes it manually and it must not change (Phase 2a lesson).
+- **Gated by `flow_model_is_trusted()`**: if model has insufficient data, falls back
+  to current PD-only behavior. Zero risk to untrained profiles.
+- **Uses measured values only**: `inertia_factor_s` and `flow_rate` are learned from
+  real dispenses via quality-weighted EMA. No synthetic parameters to tune.
+- **Loop compensation**: at 5 Hz (200ms), one extra iteration of flow must be accounted
+  for. This is `flow_rate * 0.2s` — simple and conservative.
+- **Does NOT replace PD**: PD still controls motor speed. Predictive cutoff only
+  decides *when* to stop. PD naturally reduces speed as error shrinks, so the
+  prediction becomes more accurate near target (low speed = low flow = small inflight).
+
+**Why not tune inflight_gain, delay_ms, brake_gain as parameters?**
+Evaluated as part of SPSA-based autotune proposal (see `docs/autotune_comparison_rp2040_vs_esp32s3.md`).
+Rejected because:
+- `inertia_factor_s` is already measured empirically by flow model — adding a tunable
+  `inflight_gain` multiplier would fight the measured value
+- `transport_delay_ms` is already measured — making it a tunable parameter is regression
+- `brake_gain` has no physical actuator (stepper motor: speed=0 is the only "brake")
+- `switch_margin_gn` ≡ `coarse_stop_threshold` which was already reverted (Phase 2a)
+- SPSA with 6 parameters needs ~40-60 trials (20-30 min), too expensive in powder
+
+**Expected improvement**: reduced fine motor overshoot by 30-60% on trusted profiles.
+Primary benefit is for fast powders with high inertia (fine inertia > 0.3s).
+
+**Requires**: Phase 1b (confidence gating). Recommended after Phase 2d (max_speed limit).
+
+### Phase 2f: Improved autotune cost function and early stop — TODO
+
+Upgrade the (1+1)-ES autotune fitness function and add convergence shortcuts.
+Keeps the existing ES algorithm (no switch to SPSA — see rationale below).
+
+**Improved cost function**:
+```c
+float autotune_cost(trial_result_t tr) {
+    // Hard constraints — trial is unusable
+    if (tr.t_total_s > 30.0f) return 1e9f;
+
+    float e  = fabsf(tr.target_gn - tr.settled_gn);
+    float o  = fmaxf(0.0f, tr.peak_gn - tr.target_gn);
+    float sd = tr.settle_sd_gn;
+    float dt = fmaxf(0.0f, tr.t_total_s - t_target_s);
+
+    // Weight accuracy dominates, overshoot penalized 4× vs undershoot
+    // Time is secondary, settling noise is minor tiebreaker
+    float J = 1200.0f * e + 4800.0f * o + 800.0f * sd + 25.0f * dt;
+
+    // Optional: extra penalty for very slow dispenses
+    if (tr.t_total_s > 22.0f) J += 200.0f;
+
+    return J;
+}
+```
+
+**Why these weights**:
+- 0.05 gn error → 60 pts (baseline)
+- 0.05 gn overshoot → 240 pts (4× worse than undershoot — overshoot is irreversible)
+- 0.02 gn settle SD → 16 pts (minor factor)
+- 10s time delta → 250 pts (matters, but never overrides accuracy)
+
+Compared to current fitness (`abs_error + 2*overshoot`):
+- Adds time optimization (currently ignored)
+- Adds settling noise (currently ignored)
+- Stronger overshoot penalty (4× vs 2×)
+- Absolute scale enables comparison across different targets
+
+**Early stop**:
+```c
+// After each trial in ES loop:
+if (fabsf(weight_err) <= weight_tol
+    && overshoot <= 0.02f
+    && t_total_s <= t_target_s + time_tol
+    && settle_sd <= 0.02f) {
+    consecutive_good++;
+} else {
+    consecutive_good = 0;
+}
+if (consecutive_good >= 3) {
+    // Converged — skip remaining trials
+    break;
+}
+```
+
+**Winner verification** (run after ES completes):
+```c
+// Take best θ* from ES, run 2 verification trials
+// Accept only if median cost confirms quality
+// This prevents lucky single-trial flukes from being saved
+trial_t v1 = run_trial(best_theta);
+trial_t v2 = run_trial(best_theta);
+float median_cost = median3(best_cost, cost(v1), cost(v2));
+if (median_cost < ACCEPTABLE_THRESHOLD) {
+    apply_to_profile(best_theta);
+}
+```
+
+**Why keep (1+1)-ES instead of switching to SPSA**:
+- ES needs 1 trial/iteration; SPSA needs 2 (gradient estimation requires θ+cΔ and θ−cΔ)
+- Our parameter space is small (2 params per stage: Kp, Kd)
+- For 2D, ES converges in ~8-12 trials; SPSA would need similar count but with 2× cost
+- ES already works in log-space with adaptive σ — well-suited for gain parameters
+- SPSA shines in high dimensions (6+ params) — but we rejected the extra parameters
+- Powder is expensive: fewer trials = better
+
+**Requires**: nothing (can be implemented independently of Phase 2d/2e).
+
 ### Current state summary
 - **Active**: flow model self-learning with quality-weighted EMA + extended filters
 - **Complete**: Phase 1 + 1b — recording, model building, quality scoring, confidence tracking
 - **Reverted**: inertia-aware coarse stop (Phase 2a) — overwrites user-tuned thresholds
 - **Rejected**: inertia-aware fine stop (Phase 2b) — too complex for marginal gain
 - **TODO**: auto max_speed limit (Phase 2d) — first safe active adaptation
-- **Future**: feedforward speed (Phase 2c) — needs careful redesign (requires 2d stable)
+- **TODO**: predictive fine cutoff (Phase 2e) — first real-time use of flow model in PD loop
+- **TODO**: improved autotune cost + early stop (Phase 2f) — better optimization quality
+- **Future**: feedforward speed (Phase 2c) — needs careful redesign (requires 2e stable)
 - PD control unchanged with fixed thresholds, precision is priority over speed
-- User preference: precision > speed. Overshoot (przesyp) = bad, undershoot = acceptable
-- Next step: Phase 2d, then 2c → 3
+- User preference: precision > speed. Overshoot = bad, undershoot = acceptable
+- Next steps: 2d → 2e → 2f → 2c → 3 → 4 (BO offloaded to WebUI)
 
 ## Phase 3: Analytical PD tuning (future)
+
 Use the flow model's slope (d_flow/d_speed) at the operating point to analytically
 compute optimal Kp/Kd values, replacing or augmenting the evolutionary autotune.
 Note: only Kp and Kd — Ki is not used.
+
+**CMA-ES as upgrade path**: if Phase 3 requires tuning more than 2 parameters
+simultaneously (e.g., coarse Kp/Kd + fine Kp/Kd = 4D, or adding feedforward gains),
+consider CMA-ES (Covariance Matrix Adaptation Evolution Strategy) instead of (1+1)-ES.
+CMA-ES captures parameter correlations (e.g., Kp↔Kd interaction) and is more robust
+in noisy environments with populations of λ=6-10 candidates per generation.
+Not worth it for 2D — (1+1)-ES is more sample-efficient there. CMA-ES starts to
+outperform at 4-6+ dimensions where parameter interactions matter.
+
+## Phase 4: Offloaded Bayesian Optimization via WebUI (future)
+
+**Concept**: move the optimization intelligence to PC/WebUI while ESP32 remains
+a trial executor. This minimizes the number of physical dispenses needed.
+
+**Architecture**:
+```
+WebUI (PC)                          ESP32
+  │                                   │
+  ├─ GP surrogate model               │
+  ├─ Acquisition function (EI/UCB)    │
+  ├─ Suggest next θ ──────────────────▶ Execute dispense
+  │                                   ├─ Record telemetry
+  ◀────────────────────────────────── ├─ Return trial result
+  ├─ Update GP model                  │
+  ├─ Suggest next θ ...               │
+  └─ ...                              └─ ...
+```
+
+**Why this is attractive**:
+- Bayesian Optimization is the gold standard for expensive black-box optimization
+- Gaussian Process surrogate models the cost landscape from few samples
+- Acquisition function (Expected Improvement) balances exploration vs exploitation
+- Typically converges in 8-15 trials for 2-4D — similar to ES but with better
+  uncertainty quantification and less wasted powder
+- ESP32 firmware needs zero changes — `/rest/autotune_trials` already returns
+  full per-trial telemetry (stage, kp, kd, weight_error, time_error, overshoot,
+  settled_weight, elapsed_s)
+
+**Why not now**:
+- Requires active PC connection during autotune (no standalone operation)
+- GP library needed in WebUI (Python backend or JS implementation)
+- Round-trip latency: PC → REST → ESP → dispense → REST → PC → compute
+- Current (1+1)-ES on ESP32 works well enough for 2D optimization
+- Phase 2e (predictive cutoff) and 2f (better cost) give bigger gains first
+
+**When to consider**: after Phase 2e+2f are stable and if users want to optimize
+more parameters simultaneously (e.g., Kp/Kd + feedforward gains + speed profiles).
+The existing REST telemetry endpoint makes this a WebUI-only addition.
+
+## Evaluated and rejected approaches
+
+### SPSA-based autotune with 6-parameter vector (rejected)
+
+A full SPSA (Simultaneous Perturbation Stochastic Approximation) approach was evaluated
+that would tune: delay_ms, inflight_gain, brake_gain, switch_margin_gn, fine_kp, fine_kd.
+
+**Rejected because**:
+1. **SPSA needs 2 trials per iteration** for gradient estimation (θ+cΔ and θ−cΔ).
+   With 6 parameters and realistic 5 iterations = 10 trials minimum. Gradient estimates
+   in 6D from 10 trials are extremely noisy. Reliable convergence needs ~40-60 trials
+   (20-30 minutes, significant powder waste).
+2. **4 of 6 parameters are unnecessary**:
+   - `delay_ms`: already measured empirically by flow model with quality-weighted EMA
+   - `inflight_gain`: flow model already measures `inertia_factor_s` empirically
+   - `brake_gain`: no physical actuator (stepper motor has no variable braking)
+   - `switch_margin_gn`: equivalent to `coarse_stop_threshold`, already reverted (Phase 2a)
+3. **Remaining 2 params (fine_kp, fine_kd)** are already tuned by (1+1)-ES which needs
+   only 1 trial/iteration and converges well in 2D.
+4. **Flow model refresh phase (6 warmup trials)** is unnecessary — model learns from
+   every normal dispense. If user has done a few charges, model is already current.
+
+**What was adopted from the proposal**:
+- Improved cost function with time + settle SD terms (→ Phase 2f)
+- 4× overshoot penalty instead of 2× (→ Phase 2f)
+- Early stop on 3 consecutive good trials (→ Phase 2f)
+- Winner verification with 2 confirmation trials (→ Phase 2f)
+- Predictive cutoff concept using flow model data (→ Phase 2e, simplified)
+
+See `docs/autotune_comparison_rp2040_vs_esp32s3.md` for full RP2040 vs ESP32-S3 comparison.
+
+### Relay feedback autotune / Åström-Hägglund (rejected)
+
+Classic industrial PID autotuning method: force relay oscillations, measure ultimate
+gain (Ku) and period (Tu), compute PID parameters via Ziegler-Nichols or similar rules.
+
+**Rejected because**:
+1. **Not suited for weight control loop**: the plant (powder trickler → scale) is not
+   a continuous process — it has discrete granular flow, transport delay, and settling
+   dynamics that don't produce clean oscillations.
+2. **Motor speed loop calibration**: relay could work for characterizing motor dynamics
+   (speed command → actual flow), but flow model already does this passively from every
+   dispense with quality-weighted EMA. Relay would require a dedicated calibration mode
+   that wastes powder without improving accuracy.
+3. **Already covered by flow model**: the relay method's goal is to characterize the
+   plant — our flow model does exactly that, but continuously and without dedicated
+   test runs.
+
+**From RP2040 comparison**: the RP2040 project also does not use relay method. Both
+projects use iterative optimization (binary search on RP2040, ES on ESP32-S3).
+
+### (µ/µ,λ)-ES and population-based ES variants (deferred)
+
+Population-based ES generates λ=6-10 candidates per generation and selects best µ.
+More robust against measurement noise than single-offspring (1+1)-ES.
+
+**Deferred because**:
+1. **6 trials per generation** vs 1 trial in (1+1)-ES — at ~15-30s per trial, one
+   generation takes 90-180s. With budget of ~16 trials, only 2-3 generations possible.
+2. **Noise is manageable**: scale noise is ±0.02gn, small relative to typical weight
+   errors during tuning (0.05-0.5gn). Winner verification (Phase 2f) addresses the
+   same concern more cheaply — 2 extra trials vs 5× trials per generation.
+3. **Upgrade path exists**: if measurement noise proves problematic after Phase 2f
+   winner verification is implemented, population ES or CMA-ES can be adopted.
+   The cost function and parameter space are algorithm-agnostic.
+
+### Tunable prediction parameters in autotune (rejected)
+
+Instead of tuning prediction parameters (inflight_gain, brake_gain, etc.), the system
+uses **measured physical quantities** from the flow model:
+- `inertia_factor_s` — empirical seconds of in-flight powder (quality-weighted EMA)
+- `transport_delay_ms` — empirical delay from motor start to scale response
+- `flow_rate(rps)` — empirical speed-to-flow mapping per bin
+
+Rationale: tuning a multiplier on top of a measured value introduces a second source
+of adaptation that can fight the first. If the model measures inertia = 0.35s and
+autotune learns inflight_gain = 0.8, the effective inertia is 0.28s — but the model
+will then re-learn inertia based on the changed behavior, creating an unstable loop.
+Using measured values directly is simpler, more transparent, and self-correcting.
 
 ## Files
 
