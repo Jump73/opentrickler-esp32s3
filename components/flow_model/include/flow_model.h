@@ -10,7 +10,7 @@ extern "C" {
 #endif
 
 #define FLOW_TABLE_POINTS   12
-#define FLOW_RECORD_MAX     2048
+#define FLOW_RECORD_MAX     512
 
 // Single recorded sample during a dispense
 typedef struct {
