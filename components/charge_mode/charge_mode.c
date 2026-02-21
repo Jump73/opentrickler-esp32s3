@@ -18,6 +18,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include <string.h>
+#include <inttypes.h>
 #include <stdlib.h>
 #include <math.h>
 
@@ -30,6 +31,10 @@ static const char *TAG = "ChargeMode";
 // Task parameters
 #define TASK_STACK          4096
 #define TASK_PRIORITY       8
+
+// Fine motor trickle: switch from PD to fixed slow speed within this many grains of target.
+// Prevents overshoot from inertia — motor crawls the last bit while reading scale.
+#define FINE_TRICKLE_THRESHOLD_GN  0.3f
 
 /* ══════════════════════ Float Ring Buffer ══════════════════════ */
 
@@ -252,6 +257,7 @@ static void do_wait_for_complete(void)
     float last_error = 0.0f;
     TickType_t last_sample_tick = xTaskGetTickCount();
     bool coarse_running = true;
+    bool fine_trickle = false;  // true once we enter slow trickle zone
 
     // Flow model profile index (for recording)
     uint8_t profile_idx = profile_get_selected_idx();
@@ -325,10 +331,12 @@ static void do_wait_for_complete(void)
             // Mark coarse motor stop (recording continues for inertia measurement)
             flow_model_record_stop();
             // Collect post-stop settling samples for inertia calculation
+            // Update displayed weight so UI reflects in-flight powder from coarse
             for (int i = 0; i < 10; i++) {
                 float settle_w;
                 if (scale_block_wait_for_measurement(200, &settle_w)) {
                     flow_model_record_sample(0.0f, settle_w);
+                    runtime_state.current_weight = settle_w;
                 }
             }
             flow_model_analyze_and_update(profile_get_selected_idx());
@@ -352,10 +360,26 @@ static void do_wait_for_complete(void)
             set_speed = fmaxf(coarse_min_speed, fminf(set_speed, coarse_max_speed));
             motor_set_speed(MOTOR_COARSE, set_speed);
         } else {
-            set_speed = profile->fine_kp * error
-                      + profile->fine_kd * derivative;
-            set_speed = fmaxf(fine_min_speed, fminf(set_speed, fine_max_speed));
-            motor_set_speed(MOTOR_FINE, set_speed);
+            // Enter trickle mode when within FINE_TRICKLE_THRESHOLD_GN of target.
+            // Motor crawls at minimum flow speed; scale is read after each 200ms
+            // interval so we stop before inertia can cause overshoot.
+            if (!fine_trickle && error <= FINE_TRICKLE_THRESHOLD_GN) {
+                fine_trickle = true;
+                ESP_LOGI(TAG, "Fine: trickle mode at %.4f gn (err=%.4f)", current_weight, error);
+            }
+
+            if (!fine_trickle) {
+                // PD fast approach
+                set_speed = profile->fine_kp * error
+                          + profile->fine_kd * derivative;
+                set_speed = fmaxf(fine_min_speed, fminf(set_speed, fine_max_speed));
+                motor_set_speed(MOTOR_FINE, set_speed);
+            } else {
+                // Proportional trickle: P-only (no D), capped at 30% of max speed.
+                // Slows motor near target without derivative noise; faster than fixed min_speed.
+                set_speed = fmaxf(fine_min_speed, fminf(profile->fine_kp * error, fine_max_speed * 0.3f));
+                motor_set_speed(MOTOR_FINE, set_speed);
+            }
         }
 
         // Record sample for flow model
@@ -365,15 +389,54 @@ static void do_wait_for_complete(void)
         last_error = error;
     }
 
-    // Finalize flow recording — collect settling samples for inertia
+    // Wait for weight to fully stabilize after motor stop.
+    // Powder in the tube continues falling for 500-800ms after stop.
+    // Minimum 400ms, exits early once SD < 0.015gn over 10 consecutive reads, max 2500ms.
     flow_model_record_stop();
-    for (int i = 0; i < 10; i++) {
-        float settle_w;
-        if (scale_block_wait_for_measurement(200, &settle_w)) {
-            flow_model_record_sample(0.0f, settle_w);
+    {
+        ring_buf_t settle_buf;
+        ring_buf_init(&settle_buf, 10);
+        TickType_t settle_start = xTaskGetTickCount();
+        while (1) {
+            float settle_w;
+            if (scale_block_wait_for_measurement(200, &settle_w)) {
+                flow_model_record_sample(0.0f, settle_w);
+                ring_buf_push(&settle_buf, settle_w);
+                runtime_state.current_weight = settle_w;
+            }
+            uint32_t elapsed_ms = (uint32_t)((xTaskGetTickCount() - settle_start) * portTICK_PERIOD_MS);
+            if (elapsed_ms >= 400 && settle_buf.count >= 10 && ring_buf_sd(&settle_buf) < 0.015f) {
+                ESP_LOGI(TAG, "Weight stable: %.4f gn after %" PRIu32 "ms", runtime_state.current_weight, elapsed_ms);
+                break;
+            }
+            if (elapsed_ms >= 2500) {
+                ESP_LOGI(TAG, "Settle timeout at %.4f gn", runtime_state.current_weight);
+                break;
+            }
         }
     }
     flow_model_analyze_and_update(profile_get_selected_idx());
+
+    // Classify charge result immediately after settling so REST API and LED
+    // reflect the real outcome (overcharge visible) before WAIT_FOR_CUP_REMOVAL.
+    // do_wait_for_cup_removal() will continue live reclassification from here.
+    {
+        float final_weight = runtime_state.current_weight;
+        float final_error = target - final_weight;
+        if (final_error <= -charge_mode_config.fine_stop_threshold) {
+            runtime_state.charge_mode_event = CHARGE_MODE_EVENT_OVER_CHARGE;
+            charge_mode_set_led(charge_mode_config.neopixel_over_charge_colour);
+            ESP_LOGW(TAG, "POST-SETTLE: OVER CHARGE weight=%.4f error=%.4f", final_weight, final_error);
+        } else if (final_error >= charge_mode_config.fine_stop_threshold) {
+            runtime_state.charge_mode_event = CHARGE_MODE_EVENT_UNDER_CHARGE;
+            // LED stays yellow (under-charge colour set at charge start)
+            ESP_LOGI(TAG, "POST-SETTLE: UNDER CHARGE weight=%.4f error=%.4f", final_weight, final_error);
+        } else {
+            runtime_state.charge_mode_event = 0;
+            charge_mode_set_led(charge_mode_config.neopixel_normal_charge_colour);
+            ESP_LOGI(TAG, "POST-SETTLE: OK weight=%.4f error=%.4f", final_weight, final_error);
+        }
+    }
 
     // Stop timer
     TickType_t now = xTaskGetTickCount();
@@ -412,21 +475,15 @@ static void do_wait_for_cup_removal(void)
 {
     ESP_LOGI(TAG, "State: WAIT_FOR_CUP_REMOVAL");
 
-    // Wait for scale to fully settle after motor stop
-    vTaskDelay(pdMS_TO_TICKS(1000));
+    // Short grace period — weight is already stable from the settling loop above.
+    vTaskDelay(pdMS_TO_TICKS(300));
 
-    // Wait for cup removal with smart reclassification:
-    // - Keep reclassifying while weight stays near target (powder settling)
-    // - Freeze classification when weight jumps (hand touching cup)
+    // Wait for cup removal only — no reclassification.
+    // Classification was already finalized by the settling loop above.
     ring_buf_t data_buffer;
     ring_buf_init(&data_buffer, 5);
-    float classified_weight = 0.0f;
-    bool classification_frozen = false;
-    uint32_t last_led_state = 0;
 
     while (!exit_requested()) {
-        TickType_t tick_start = xTaskGetTickCount();
-
         float measurement;
         if (!scale_block_wait_for_measurement(200, &measurement)) {
             continue;
@@ -434,57 +491,17 @@ static void do_wait_for_cup_removal(void)
         runtime_state.current_weight = measurement;
         ring_buf_push(&data_buffer, measurement);
 
-        // Reclassify only while weight is close to target (powder settling).
-        // Freeze when weight deviates by more than 1gn from last classified
-        // reading — that means user's hand is on the cup.
-        if (!classification_frozen) {
-            if (classified_weight != 0.0f &&
-                fabsf(measurement - classified_weight) > 1.0f) {
-                classification_frozen = true;
-            } else {
-                classified_weight = measurement;
-                float error = runtime_state.target_charge_weight - measurement;
-
-                uint32_t new_led_colour;
-                if (error <= -charge_mode_config.fine_stop_threshold) {
-                    runtime_state.charge_mode_event = CHARGE_MODE_EVENT_OVER_CHARGE;
-                    new_led_colour = charge_mode_config.neopixel_over_charge_colour;
-                } else if (error >= charge_mode_config.fine_stop_threshold) {
-                    runtime_state.charge_mode_event = CHARGE_MODE_EVENT_UNDER_CHARGE;
-                    new_led_colour = charge_mode_config.neopixel_under_charge_colour;
-                } else {
-                    runtime_state.charge_mode_event = 0;
-                    new_led_colour = charge_mode_config.neopixel_normal_charge_colour;
-                }
-
-                if (new_led_colour != last_led_state) {
-                    charge_mode_set_led(new_led_colour);
-                    last_led_state = new_led_colour;
-                    if (runtime_state.charge_mode_event == CHARGE_MODE_EVENT_OVER_CHARGE) {
-                        ESP_LOGW(TAG, "OVER CHARGE: weight=%.4f, error=%.4f", measurement, error);
-                    } else if (runtime_state.charge_mode_event == CHARGE_MODE_EVENT_UNDER_CHARGE) {
-                        ESP_LOGW(TAG, "UNDER CHARGE: weight=%.4f, error=%.4f", measurement, error);
-                    } else {
-                        ESP_LOGI(TAG, "GOOD CHARGE: weight=%.4f, error=%.4f", measurement, error);
-                    }
-                }
-            }
-        }
-
         // Stop condition: 5 stable readings with very negative mean (cup removed)
         if (data_buffer.count >= 5) {
             float sd = ring_buf_sd(&data_buffer);
             float mean = ring_buf_mean(&data_buffer);
 
-            // Original: mean + 10 < margin (meaning mean < margin - 10, so very negative)
             if (sd < charge_mode_config.set_point_sd_margin &&
                 mean + 10.0f < charge_mode_config.set_point_mean_margin) {
                 ESP_LOGI(TAG, "Cup removed (mean=%.4f, sd=%.4f)", mean, sd);
                 break;
             }
         }
-
-        vTaskDelayUntil(&tick_start, pdMS_TO_TICKS(300));
     }
 
     // Reset LED to default colours after cup removed (matches original)

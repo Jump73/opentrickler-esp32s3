@@ -895,13 +895,12 @@ char* rest_autotune_coarse_handler(int num_params, char *params[], char *values[
 
     autotune_request_t request = {
         .coarse_target_weight = 18.5f,
-        .coarse_target_time_s = 6.0f,
         .fine_target_weight = 20.0f,
-        .fine_target_time_s = 2.5f,
+        .total_target_time_s = 10.0f,
         .max_runs_per_stage = 15,
         .coarse_weight_tolerance = 0.10f,
         .fine_weight_tolerance = 0.03f,
-        .time_tolerance_s = 0.35f,
+        .time_tolerance_s = 2.0f,
         .auto_apply = true,
         .save_to_nvs = false,
     };
@@ -914,13 +913,10 @@ char* rest_autotune_coarse_handler(int num_params, char *params[], char *values[
             request.coarse_target_weight = strtof(values[idx], NULL);
         }
         else if (strcmp(params[idx], "a2") == 0) {
-            request.coarse_target_time_s = strtof(values[idx], NULL);
+            request.total_target_time_s = strtof(values[idx], NULL);
         }
         else if (strcmp(params[idx], "a3") == 0) {
             request.fine_target_weight = strtof(values[idx], NULL);
-        }
-        else if (strcmp(params[idx], "a4") == 0) {
-            request.fine_target_time_s = strtof(values[idx], NULL);
         }
         else if (strcmp(params[idx], "a5") == 0) {
             request.max_runs_per_stage = atoi(values[idx]);

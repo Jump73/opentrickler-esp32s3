@@ -15,6 +15,9 @@ static const char *TAG = "Autotune";
 #define AUTOTUNE_STACK_SIZE 5120
 #define AUTOTUNE_TASK_PRIO 7
 
+// Fine motor trickle threshold (shared with charge_mode logic)
+#define FINE_TRICKLE_THRESHOLD_GN 0.3f
+
 typedef struct {
     float data[10];
     int head;
@@ -250,6 +253,7 @@ static bool run_single_motor_dispense(motor_type_t motor,
     float peak_weight = 0.0f;  // track max weight during dispensing
     TickType_t start_tick = xTaskGetTickCount();
     TickType_t last_tick = start_tick;
+    bool fine_trickle = false;  // fine motor only: crawl at min_speed near target
 
     if (motor == MOTOR_COARSE) {
         motor_enable(MOTOR_FINE, false);
@@ -318,10 +322,25 @@ static bool run_single_motor_dispense(motor_type_t motor,
             return true;
         }
 
+        // Fine motor: switch to trickle (P-only, no derivative) within FINE_TRICKLE_THRESHOLD_GN.
+        // Proportional trickle slows motor near target without derivative noise,
+        // and is faster than fixed min_speed (speed scales with remaining error).
+        if (motor == MOTOR_FINE && !fine_trickle && error <= FINE_TRICKLE_THRESHOLD_GN) {
+            fine_trickle = true;
+            ESP_LOGI(TAG, "Fine: trickle at err=%.4f", error);
+        }
+
+        float speed;
         float derivative = (error - last_error) / dt_ms;
-        float speed = kp * error + kd * derivative;
-        speed = fmaxf(min_speed, fminf(speed, max_speed));
-        motor_set_speed(motor, speed);
+        if (fine_trickle) {
+            // P-only proportional trickle: capped at 30% of max_speed to limit inertia.
+            speed = fmaxf(min_speed, fminf(kp * error, max_speed * 0.3f));
+            motor_set_speed(motor, speed);
+        } else {
+            speed = kp * error + kd * derivative;
+            speed = fmaxf(min_speed, fminf(speed, max_speed));
+            motor_set_speed(motor, speed);
+        }
         flow_model_record_sample(speed, weight);
 
         last_error = error;
@@ -361,7 +380,8 @@ static bool run_fine_stage_with_coarse_prefill(float coarse_kp,
                                                float fine_kd,
                                                float *final_w,
                                                float *fine_elapsed_s,
-                                               float *fine_overshoot)
+                                               float *fine_overshoot,
+                                               float *coarse_elapsed_out)
 {
     profile_t *profile = profile_get_selected();
     if (!profile) {
@@ -385,7 +405,7 @@ static bool run_fine_stage_with_coarse_prefill(float coarse_kp,
                                                coarse_kp,
                                                coarse_kd,
                                                s_request.coarse_target_weight,
-                                               s_request.coarse_target_time_s * 1.7f + 5.0f,
+                                               s_request.total_target_time_s + 15.0f,
                                                coarse_min,
                                                coarse_max,
                                                5000,
@@ -397,7 +417,7 @@ static bool run_fine_stage_with_coarse_prefill(float coarse_kp,
         return false;
     }
 
-    (void)coarse_elapsed;
+    *coarse_elapsed_out = coarse_elapsed;
     (void)coarse_overshoot;
 
     float fine_w = 0.0f;
@@ -407,7 +427,7 @@ static bool run_fine_stage_with_coarse_prefill(float coarse_kp,
                                              fine_kp,
                                              fine_kd,
                                              s_request.fine_target_weight,
-                                             s_request.fine_target_time_s * 1.7f + 5.0f,
+                                             s_request.total_target_time_s + 15.0f,
                                              fine_min,
                                              fine_max,
                                              8000,
@@ -665,7 +685,7 @@ static bool tune_coarse_stage(profile_t *profile,
         bool ok = run_single_motor_dispense(MOTOR_COARSE,
                                             kp, kd,
                                             s_request.coarse_target_weight,
-                                            s_request.coarse_target_time_s * 1.7f + 5.0f,
+                                            s_request.total_target_time_s + 15.0f,
                                             min_speed, max_speed,
                                             5000,
                                             &final_w, &elapsed_s, &overshoot);
@@ -677,34 +697,35 @@ static bool tune_coarse_stage(profile_t *profile,
         s_status.last_elapsed_s = elapsed_s;
 
         float werr = final_w - s_request.coarse_target_weight;
-        float terr = elapsed_s - s_request.coarse_target_time_s;
         float abs_werr = fabsf(werr);
-        float abs_terr = fabsf(terr);
+        // Coarse time: one-sided vs total budget (being fast is always ok; slow is excess)
+        float es_terr = fmaxf(0.0f, elapsed_s - s_request.total_target_time_s);
 
-        // Record trial
-        trials_add(1, kp, kd, werr, terr, overshoot, final_w, elapsed_s);
+        // Record trial (time_error = coarse elapsed relative to total target, informational)
+        trials_add(1, kp, kd, werr, elapsed_s - s_request.total_target_time_s, overshoot, final_w, elapsed_s);
 
-        // Update ES and track best
-        bool improved = es_update(kp, kd, abs_werr, abs_terr, overshoot);
+        // Update ES and track best (time is one-sided tiebreaker only)
+        bool improved = es_update(kp, kd, abs_werr, es_terr, overshoot);
         if (improved || run == 1) {
             *best_kp = kp;
             *best_kd = kd;
             *best_abs_werr = abs_werr;
-            *best_abs_terr = abs_terr;
+            *best_abs_terr = elapsed_s;  // store coarse elapsed for reference
             s_status.coarse_best_kp = kp;
             s_status.coarse_best_kd = kd;
             s_status.coarse_best_weight_error = abs_werr;
-            s_status.coarse_best_time_error = abs_terr;
+            s_status.coarse_best_time_error = elapsed_s;
         }
 
         s_status.runs_done++;
         s_status.progress_pct = ((float)s_status.runs_done / (float)s_status.runs_total) * 100.0f;
 
-        ESP_LOGI(TAG, "COARSE run %d/%d: kp=%.5f kd=%.5f w=%.4f t=%.2f werr=%.4f terr=%.3f os=%.4f",
-                 run, s_request.max_runs_per_stage, kp, kd, final_w, elapsed_s, abs_werr, abs_terr, overshoot);
+        ESP_LOGI(TAG, "COARSE run %d/%d: kp=%.5f kd=%.5f w=%.4f t=%.2f werr=%.4f os=%.4f",
+                 run, s_request.max_runs_per_stage, kp, kd, final_w, elapsed_s, abs_werr, overshoot);
 
-        if (abs_werr <= s_request.coarse_weight_tolerance && abs_terr <= s_request.time_tolerance_s) {
-            ESP_LOGI(TAG, "COARSE tuned to tolerance on run %d", run);
+        // Coarse tolerance: weight only (time is evaluated at total cycle level in fine stage)
+        if (abs_werr <= s_request.coarse_weight_tolerance) {
+            ESP_LOGI(TAG, "COARSE tuned to weight tolerance on run %d", run);
             tolerance_reached = true;
             break;
         }
@@ -756,44 +777,51 @@ static bool tune_fine_stage(profile_t *profile,
         float final_w = 0.0f;
         float fine_elapsed = 0.0f;
         float overshoot = 0.0f;
+        float actual_coarse_elapsed = 0.0f;
         bool ok = run_fine_stage_with_coarse_prefill(coarse_kp, coarse_kd,
                                                      kp, kd,
                                                      &final_w, &fine_elapsed,
-                                                     &overshoot);
+                                                     &overshoot,
+                                                     &actual_coarse_elapsed);
         if (!ok) {
             return false;
         }
 
+        float total_elapsed = actual_coarse_elapsed + fine_elapsed;
         s_status.last_weight = final_w;
-        s_status.last_elapsed_s = fine_elapsed;
+        s_status.last_elapsed_s = total_elapsed;
 
         float werr = final_w - s_request.fine_target_weight;
-        float terr = fine_elapsed - s_request.fine_target_time_s;
         float abs_werr = fabsf(werr);
-        float abs_terr = fabsf(terr);
+        // Total cycle time vs target: negative = under (always ok), positive = over budget
+        float terr = total_elapsed - s_request.total_target_time_s;
+        // One-sided with tolerance zone: excess within time_tolerance_s is free (no ES penalty).
+        float es_terr = fmaxf(0.0f, terr - s_request.time_tolerance_s);
 
-        trials_add(2, kp, kd, werr, terr, overshoot, final_w, fine_elapsed);
+        trials_add(2, kp, kd, werr, terr, overshoot, final_w, total_elapsed);
 
-        bool improved = es_update(kp, kd, abs_werr, abs_terr, overshoot);
+        bool improved = es_update(kp, kd, abs_werr, es_terr, overshoot);
         if (improved || run == 1) {
             *best_kp = kp;
             *best_kd = kd;
             *best_abs_werr = abs_werr;
-            *best_abs_terr = abs_terr;
+            *best_abs_terr = fabsf(terr);
             s_status.fine_best_kp = kp;
             s_status.fine_best_kd = kd;
             s_status.fine_best_weight_error = abs_werr;
-            s_status.fine_best_time_error = abs_terr;
+            s_status.fine_best_time_error = terr;
         }
 
         s_status.runs_done++;
         s_status.progress_pct = ((float)s_status.runs_done / (float)s_status.runs_total) * 100.0f;
 
-        ESP_LOGI(TAG, "FINE run %d/%d: kp=%.5f kd=%.5f w=%.4f t=%.2f werr=%.4f terr=%.3f os=%.4f",
-                 run, s_request.max_runs_per_stage, kp, kd, final_w, fine_elapsed, abs_werr, abs_terr, overshoot);
+        ESP_LOGI(TAG, "FINE run %d/%d: kp=%.5f kd=%.5f w=%.4f t_fine=%.2f t_total=%.2f werr=%.4f terr=%.3f os=%.4f",
+                 run, s_request.max_runs_per_stage, kp, kd, final_w, fine_elapsed, total_elapsed, abs_werr, terr, overshoot);
 
-        if (abs_werr <= s_request.fine_weight_tolerance && abs_terr <= s_request.time_tolerance_s) {
-            ESP_LOGI(TAG, "FINE tuned to tolerance on run %d", run);
+        // Tolerance: weight accuracy only — time is optimized by ES cost, not a hard gate.
+        // This prevents autotune from failing when physics makes time target unreachable.
+        if (abs_werr <= s_request.fine_weight_tolerance) {
+            ESP_LOGI(TAG, "FINE tuned to tolerance on run %d (total=%.2fs)", run, total_elapsed);
             tolerance_reached = true;
             break;
         }
@@ -902,9 +930,8 @@ esp_err_t autotune_start(const autotune_request_t *request)
     }
 
     if (request->coarse_target_weight <= 0.01f ||
-        request->coarse_target_time_s <= 0.1f ||
         request->fine_target_weight <= 0.01f ||
-        request->fine_target_time_s <= 0.1f ||
+        request->total_target_time_s <= 0.1f ||
         request->max_runs_per_stage < 1 ||
         request->coarse_weight_tolerance <= 0.0f ||
         request->fine_weight_tolerance <= 0.0f ||

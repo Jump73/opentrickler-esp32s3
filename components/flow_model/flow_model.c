@@ -13,6 +13,7 @@ static const char *TAG = "flow_model";
 #define NVS_NAMESPACE   "flow_model"
 #define MAX_PROFILES    8
 #define EMA_ALPHA       0.3f
+#define HUBER_DELTA     0.5f   // max residual influence per EMA update (gn/s)
 
 // ---------------------------------------------------------------------------
 // Default speed bins (fixed, not adaptive)
@@ -362,8 +363,11 @@ esp_err_t flow_model_analyze_and_update(uint8_t profile_idx)
             // First observation — take directly
             pt->flow_rate_gn_s = median;
         } else {
-            // Quality-weighted EMA merge
-            pt->flow_rate_gn_s = (1.0f - alpha) * pt->flow_rate_gn_s + alpha * median;
+            // Huber-clipped quality-weighted EMA merge:
+            // limits influence of single anomalous dispense to HUBER_DELTA
+            float r = median - pt->flow_rate_gn_s;
+            float g = (fabsf(r) <= HUBER_DELTA) ? r : (HUBER_DELTA * (r > 0.0f ? 1.0f : -1.0f));
+            pt->flow_rate_gn_s += alpha * g;
         }
         pt->sample_count++;
         bins_updated++;

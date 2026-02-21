@@ -7,7 +7,7 @@ static const char *TAG = "HTTP_Server";
 
 static httpd_handle_t server = NULL;
 
-#define MAX_HANDLERS 32
+#define MAX_HANDLERS 48
 #define MAX_URI_LEN 64
 
 typedef struct {

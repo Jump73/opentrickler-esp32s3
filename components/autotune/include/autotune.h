@@ -31,23 +31,16 @@ typedef enum {
 } autotune_substatus_t;
 
 typedef struct {
-    // Stage 1 (coarse only)
     float coarse_target_weight;
-    float coarse_target_time_s;
-
-    // Stage 2 (coarse + fine, tune fine section)
     float fine_target_weight;
-    float fine_target_time_s;
+    float total_target_time_s;  // target for full coarse+fine cycle; being under is always ok
 
-    // Iterative tuning limits
-    int max_runs_per_stage;     // e.g. 15
+    int max_runs_per_stage;
 
-    // Acceptance criteria
     float coarse_weight_tolerance;  // grains
     float fine_weight_tolerance;    // grains
-    float time_tolerance_s;         // seconds
+    float time_tolerance_s;         // allowed excess over total_target_time_s (seconds)
 
-    // Optional persistence
     bool auto_apply;
     bool save_to_nvs;
 } autotune_request_t;
