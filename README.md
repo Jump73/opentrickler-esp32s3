@@ -1,128 +1,143 @@
 # OpenTrickler ESP32-S3 Controller
 
-This repo is an attempt to replace the Pico W/2W in the OpenTrickler controller with an ESP32-S3-Pico board. The port is based on the work done by Ran Bao/Eeamars – link to the original repository:
+This repository ports the OpenTrickler controller from Pico W/2W to ESP32-S3.
+Original upstream project:
 https://github.com/eamars/OpenTrickler-RP2040-Controller
 
-## Project Status (~85-90% complete)
+## Project Status
 
 | Module | Status | Notes |
 |--------|--------|-------|
-| **Motor Control (MCPWM)** | ✅ Complete | Variable-speed STEP, acceleration ramp, PD control |
-| **TMC2209 UART** | ⏳ Working | Both motors run; full register r/w needs more testing |
-| **Scale (G&G JJB)** | ✅ Complete | Frame-driven polling (~20ms), queued tare |
-| **Scale (other models)** | ⏳ Untested | Universal parser + frame structs for 7 models |
-| **Display (LVGL + ST7567)** | ✅ Complete | 12-screen menu, encoder navigation, custom fonts |
-| **NeoPixel LED** | ✅ Complete | RMT WS2812B, mini12864 backlight + PWM3 mirror |
-| **Charge Mode** | ✅ Complete | PD dispense cycle, over/under detection, charge history |
-| **Cleanup Mode** | ✅ Complete | Manual trickler with reverse support |
-| **Profile System** | ✅ Complete | 8 profiles with PD params, REST CRUD |
-| **WiFi (STA + AP)** | ✅ Complete | Auto-start, NVS config storage |
-| **Web UI** | ✅ Complete | Portal, wizard, charge control, inline banners |
-| **REST API** | ✅ Mostly | 14 endpoints; servo/button/display_buffer missing |
-| **Autotuning** | ✅ Complete | (1+1)-ES evolutionary Kp/Kd autotuning, coarse then fine |
-| **Flow Model** | ✅ Active | Self-learning motor-to-weight correlation, quality-weighted EMA |
-| **Servo Gate** | ❌ Missing | Component stub only |
-| **Sartorius Scale** | ❌ Missing | No frame structure |
+| Motor Control (MCPWM) | Complete | Variable speed STEP generation, acceleration ramp, PD loop |
+| TMC2209 UART | Working | Both motors operating, full register coverage still under validation |
+| Scale (G&G JJB) | Complete | Frame-driven polling, stable runtime integration |
+| Scale (other models) | Partial | Parser/framework present, hardware validation pending |
+| Display (LVGL + ST7567) | Complete | Menu system, encoder navigation, mirror page available |
+| NeoPixel LED | Complete | WS2812 control for backlight and status LEDs |
+| Charge Mode | Complete | Coarse/fine dispense, post-settle classification, history export |
+| Cleanup Mode | Complete | Manual trickler control with reverse |
+| Profile System | Complete | Profile CRUD + NVS persistence |
+| WiFi (STA + AP) | Complete | Auto-start + NVS config |
+| Web UI | Complete | Portal + wizard + autotune panel |
+| REST API | Active | Includes autotune status, trials, telemetry, and finish-now control |
+| Autotuning | Active | Coarse/fine ES tuning, confirmations, speed probes, cancel + finish-now |
+| Flow Model | Active | Self-learning speed->flow map, delay/inertia estimation, quality-weighted EMA |
+| Servo Gate | Missing | Stub only |
+| Sartorius Scale | Missing | Not yet implemented |
 
-See [COMPARISON_REPORT.md](COMPARISON_REPORT.md) for detailed analysis.
+See `COMPARISON_REPORT.md` for broader comparison notes.
 
 ## Hardware
 
-- **MCU:** ESP32-S3-Pico (drop-in replacement for Pico W)
-- **Display:** Mini 12864 LCD (ST7567 via SPI) + NeoPixel backlight
-- **Motors:** 2x TMC2209 stepper drivers (MCPWM STEP generation)
-- **Scale:** UART serial (G&G JJB tested, 7 other models supported)
-- **Input:** Rotary encoder with button
+- MCU: ESP32-S3-Pico
+- Display: Mini 12864 LCD (ST7567 SPI) + NeoPixel backlight
+- Motors: 2x TMC2209 stepper drivers
+- Scale: UART serial (G&G JJB validated)
+- Input: rotary encoder + push button
 
 ## Software Stack
 
-- **Framework:** ESP-IDF (FreeRTOS)
-- **Graphics:** LVGL v9.2.2
-- **LED Driver:** espressif/led_strip v2.5.5 (RMT)
-- **Storage:** NVS (replaces external EEPROM)
+- Framework: ESP-IDF (FreeRTOS)
+- Graphics: LVGL
+- LED driver: `espressif/led_strip`
+- Storage: NVS
 
-## Building
+## Build
 
-Requires ESP-IDF toolchain. Build via ESP-IDF Command Prompt:
-
-```
+```bash
 idf.py build
 idf.py -p COMx flash monitor
 ```
 
-## Web UI
+## Web Access
 
-After flashing, the ESP32 creates a WiFi AP:
-- **SSID:** OpenTrickler-ESP32
-- **Password:** opentrickler
-- **URL:** http://192.168.4.1/
+Default AP mode after flashing:
+- SSID: `OpenTrickler-ESP32`
+- Password: `opentrickler`
+- URL: `http://192.168.4.1/`
 
-HTML sources are in `html/`. After editing, regenerate embedded headers:
-```
+HTML sources are in `html/`.
+After editing portal HTML, regenerate embedded header:
+
+```bash
 python scripts/html2header.py -f html/web_portal.html -o main/generated/web_portal.html.h --no-minify
 ```
 
-
 ## Charge Mode
 
-Pure PD control (Kp + Kd, no Ki) for two-stage powder dispensing:
-1. **Coarse motor** — fast bulk dispensing until `coarse_stop_threshold`
-2. **Fine motor** — precise trickle until target weight reached
+Current control is PD-based (Kp + Kd, Ki unused):
+1. Coarse motor bulk fill to coarse threshold.
+2. Fine motor precision finish to final threshold.
+3. Post-settle classification (`OK/UNDER/OVER`) after stability confirmation.
 
-Precision > speed. Overshoot is always worse than undershoot.
+Settled result now uses the final stable scale reading (no controller-side averaging of final weight).
 
-## Autotuning
+## Autotune
 
-Endpoint: `GET /rest/autotune_coarse`
+Endpoint:
+- `GET /rest/autotune_coarse`
 
-(1+1)-ES evolutionary algorithm that optimizes Kp/Kd per motor:
-1. Tunes coarse motor first (max N dispenses, adaptive Kp/Kd mutation)
-2. Then tunes fine motor (same approach)
-3. Optional auto-save of best parameters to profile
+Main behavior:
+- Stage 1: coarse tuning
+- Stage 2: fine tuning (with coarse prefill)
+- Multi-run confirmation before accepting a setup
+- Optional faster-setup probing with re-confirmation
+- Hard cancel and graceful finish-now are both supported
 
-Parameters:
-- `a1`: target weight for coarse stage (grains)
-- `a2`: target time for coarse stage (s)
-- `a3`: final target weight for fine stage (grains)
-- `a4`: target time for fine stage (s)
-- `a5`: max trials per stage (e.g. 15)
-- `a6`: weight error tolerance (grains)
-- `a7`: time error tolerance (s)
-- `a8`: auto-apply best Kp/Kd to profile
-- `ee`: save profile to NVS
+Runtime controls:
+- Cancel now (hard stop, no completion): `ca=true`
+- Finish now (graceful):
+  - in coarse: move to fine stage
+  - in fine: finish as DONE and keep last valid results
+  via `fn=true`
 
-## Flow Model (self-learning)
+Acceptance and speed search:
+- Stable candidate requires repeated confirmation runs (`search -> confirm`)
+- After stable confirmation, speed probes try faster gains
+- If a faster candidate fails re-confirmation, autotune steps back one probe level (not to the beginning)
 
-The system learns the relationship between motor speed (RPS) and powder flow rate (gn/s)
-from every dispense. This happens passively — no user action required.
+Core query parameters:
+- `a1`: coarse target weight
+- `a2`: total cycle target time
+- `a3`: fine target weight
+- `a5`: max runs per stage
+- `a6`: coarse weight tolerance
+- `a9`: fine weight tolerance
+- `a7`: time tolerance
 
-**What it does now:**
-- Records time/speed/weight samples during every dispense (charge mode + autotune)
-- After each dispense: analyzes data, updates piecewise-linear flow model per motor
-- Extended filtering: spin-up rejection, non-steady rejection, braking filter
-- Quality-weighted EMA: noisy dispenses barely affect the model
-- Per-bin confidence tracking with `trusted` threshold
-- Measures transport delay and inertia (in-flight powder after motor stop)
-- Persisted in NVS per profile (survives reboot)
+Additional outputs:
+- `/rest/autotune_trials`
+- `/rest/autotune_telemetry`
 
-**What's next (Phase 2d):**
-- Auto max_speed limit — if repeated overshoots detected, reduce max motor speed
-- One-directional safety: only slows down, never increases aggressiveness
-- Gated by model confidence (only activates when enough data collected)
+Notes:
+- `a8` (`auto_apply`) and `ee` (`save_to_nvs`) are still accepted by REST for compatibility.
+- In current Web UI flow, final PID write is done explicitly after autotune completion (`/rest/profile_config?...&ee=true`).
 
-**Future:**
-- Feedforward speed control (replace P-term with model-based speed prediction)
-- Analytical PD tuning (compute optimal Kp/Kd from flow model slope)
+## Flow Model
 
-See [docs/flow_model_plan.md](docs/flow_model_plan.md) for full technical design.
+The flow model learns motor speed to powder flow relation in normal operation.
+
+Implemented:
+- Sample recording during charge and autotune runs
+- Per-bin filtering and quality-weighted EMA updates
+- Delay and inertia estimation
+- Per-profile NVS persistence
+- Confidence/quality metrics
+
+Important current note:
+- During autotune, live flow model freezing/shadow merge is still planned and not finalized yet.
+
+Technical details:
+- `docs/flow_model_plan.md`
+- `docs/flow_model_autotune_control_recommendations.md`
 
 ## Text and Encoding Policy
 
-Project text policy:
-- Use English for source comments, log messages, UI labels, and documentation.
+- Use English for code comments, logs, UI text, and docs.
 - Use UTF-8 encoding and LF line endings.
 
-Repository checks:
+Run repository text check:
+
 ```bash
 python scripts/check_text_quality.py
 ```

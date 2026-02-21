@@ -6,7 +6,7 @@ flow rate (gn/s) from every dispense. It builds a piecewise-linear lookup table 
 persisted in NVS per profile. This is the foundation for feedforward control (phase 2)
 and analytical PID tuning (phase 3).
 
-## Status: Phase 1+1b COMPLETE, Phase 2a-c REVERTED, Phase 2d-2g TODO
+## Status: Phase 1+1b COMPLETE, Phase 2a-c REVERTED, Phase 2f (partial) ACTIVE, Phase 2d/2e/2g TODO
 
 Phase 1 (recording + model building) is fully implemented and tested.
 - Flow model component created and integrated
@@ -557,16 +557,22 @@ of large undershots that would trigger it.
 ### Current state summary
 - **Active**: flow model self-learning with quality-weighted EMA + Huber clipping + extended filters
 - **Complete**: Phase 1 + 1b — recording, model building, quality scoring, confidence tracking, Huber EMA
+- **Implemented now in autotune path**: settled-weight final-read logic (no averaging for final result)
+- **Implemented now in autotune path**: 3-phase per stage (`SEARCH -> CONFIRM -> SPEED_PROBE`)
+- **Implemented now in autotune path**: multi-run stability confirmation before stage handoff
+- **Implemented now in autotune path**: faster-setup probes with step-back by one probe level when reconfirmation fails
+- **Implemented now in autotune path**: `finish now` behavior (`COARSE -> FINE`, `FINE -> DONE`) and independent hard cancel
+- **Implemented now in autotune path**: telemetry ring exposed via `/rest/autotune_telemetry`
 - **Reverted**: inertia-aware coarse stop (Phase 2a) — overwrites user-tuned thresholds
 - **Rejected**: inertia-aware fine stop (Phase 2b) — too complex for marginal gain
 - **TODO**: auto max_speed limit (Phase 2d) — first safe active adaptation
 - **TODO**: predictive fine cutoff (Phase 2e) — first real-time use of flow model in PD loop
-- **TODO**: improved autotune cost + early stop + model freeze + post-autotune alpha (Phase 2f)
+- **TODO (remaining in Phase 2f)**: improved autotune cost + winner verification + flow model freeze/shadow merge + post-autotune reduced alpha cooldown
 - **TODO (optional)**: diagnostics ring buffer + fine correction burst (Phase 2g)
 - **Future**: feedforward speed (Phase 2c) — needs careful redesign (requires 2e stable)
 - PD control unchanged with fixed thresholds, precision is priority over speed
 - User preference: precision > speed. Overshoot = bad, undershoot = acceptable
-- Next steps: 2d → 2e → 2f → 2g (optional) → 2c → 3 → 4 (BO offloaded to WebUI)
+- Next steps: 2d → 2e → complete remaining 2f items → 2g (optional) → 2c → 3 → 4 (BO offloaded to WebUI)
 
 ## Phase 3: Analytical PD tuning (future)
 
@@ -710,10 +716,13 @@ Created:
 - `components/flow_model/include/flow_model.h`
 
 Modified:
-- `components/charge_mode/charge_mode.c` — recording + post-stop settling, FF log (no FF active)
+- `components/charge_mode/charge_mode.c` — recording + post-stop settling, stable final-read settle logic
 - `components/charge_mode/CMakeLists.txt` — added flow_model to REQUIRES
-- `components/autotune/autotune.c` — recording + post-stop settling in run_single_motor_dispense
+- `components/autotune/autotune.c` — recording + post-stop settling; staged `SEARCH/CONFIRM/SPEED_PROBE`; finish-now and speed-probe step-back logic
 - `components/autotune/CMakeLists.txt` — added flow_model to REQUIRES
-- `components/rest_handlers/rest_handlers.c` — charge mode state log level LOGI→LOGD
-- `main/main.c` — flow_model_init(), "System running" log level LOGI→LOGD
+- `components/rest_handlers/rest_handlers.c` — autotune finish-now control and autotune telemetry endpoint; settled charge values exposed as `s6/s7`
+- `components/rest_handlers/include/rest_handlers.h` — REST handler declarations updated (including telemetry endpoint)
+- `html/web_portal.html` — autotune UI flow updates (finish-now, explicit profile save flow, compatibility flags)
+- `main/generated/web_portal.html.h` — regenerated embedded portal page
+- `main/main.c` — flow_model_init() and REST endpoint registration
 - `main/CMakeLists.txt` — added flow_model to REQUIRES
