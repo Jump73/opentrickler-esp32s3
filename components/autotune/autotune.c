@@ -476,8 +476,9 @@ static bool run_single_motor_dispense(motor_type_t motor,
         float speed;
         float derivative = (error - last_error) / dt_ms;
         if (fine_trickle) {
-            // P-only proportional trickle: capped at 30% of max_speed to limit inertia.
-            speed = fmaxf(min_speed, fminf(kp * error, max_speed * 0.3f));
+            // Fixed min_speed trickle: at minimum speed the flow rate is low enough
+            // that in-flight powder at stop is within the stop threshold.
+            speed = min_speed;
             motor_set_speed(motor, speed);
         } else {
             speed = kp * error + kd * derivative;

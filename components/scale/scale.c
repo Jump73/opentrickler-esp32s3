@@ -237,6 +237,10 @@ static void scale_execute_pending_action(void)
             case SCALE_DRIVER_RADWAG_PS_R2:
                 scale_write("T\r\n", 3);
                 break;
+            case SCALE_DRIVER_OHAUS_PIONEER:
+                // Ohaus Pioneer PR/PX series: tare/re-zero command
+                scale_write("T\r\n", 3);
+                break;
             default:
                 ESP_LOGW(TAG, "Force zero not supported for this driver");
                 break;
@@ -469,6 +473,7 @@ static scale_baudrate_t get_default_baudrate_for_driver(scale_driver_t driver)
     switch (driver) {
         case SCALE_DRIVER_AND_FXI:
             return BAUDRATE_19200;
+        case SCALE_DRIVER_OHAUS_PIONEER:
         case SCALE_DRIVER_GNG_JJB:
         case SCALE_DRIVER_STEINBERG_SBS:
         case SCALE_DRIVER_USSOLID_JFDBS:

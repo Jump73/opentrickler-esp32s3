@@ -447,9 +447,9 @@ static void do_wait_for_complete(void)
                 set_speed = fmaxf(fine_min_speed, fminf(set_speed, fine_max_speed));
                 motor_set_speed(MOTOR_FINE, set_speed);
             } else {
-                // Proportional trickle: P-only (no D), capped at 30% of max speed.
-                // Slows motor near target without derivative noise; faster than fixed min_speed.
-                set_speed = fmaxf(fine_min_speed, fminf(profile->fine_kp * error, fine_max_speed * 0.3f));
+                // Fixed min_speed trickle: at minimum speed the flow rate is low enough
+                // that in-flight powder at stop is within the stop threshold.
+                set_speed = fine_min_speed;
                 motor_set_speed(MOTOR_FINE, set_speed);
             }
         }
@@ -544,6 +544,7 @@ static void do_wait_for_complete(void)
             }
         }
     }
+
     flow_model_analyze_and_update(profile_get_selected_idx());
 
     // Classify charge result immediately after settling so REST API and LED

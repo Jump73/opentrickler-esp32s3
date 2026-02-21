@@ -29,9 +29,9 @@ typedef struct {
 // Flow model for one motor
 typedef struct {
     uint8_t      num_points;
-    float        transport_delay_ms;  // time from motor start to first weight change
-    float        inertia_factor_s;    // seconds of "in-flight" powder after motor stop
-    float        last_quality;        // quality score of last dispense (0..1)
+    float        transport_delay_ms;        // time from motor start to first weight change
+    float        inertia_factor_s;          // seconds of "in-flight" powder after motor stop
+    float        last_quality;              // quality score of last dispense (0..1)
     flow_point_t points[FLOW_TABLE_POINTS];
 } flow_model_single_t;
 
