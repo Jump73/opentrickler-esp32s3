@@ -47,8 +47,11 @@ esp_err_t system_control_init(void)
 
     // Set version information
     strncpy(system_info.version_string, PROJECT_VERSION, sizeof(system_info.version_string) - 1);
+    system_info.version_string[sizeof(system_info.version_string) - 1] = '\0';
     strncpy(system_info.vcs_hash, PROJECT_VCS_HASH, sizeof(system_info.vcs_hash) - 1);
+    system_info.vcs_hash[sizeof(system_info.vcs_hash) - 1] = '\0';
     strncpy(system_info.build_type, PROJECT_BUILD_TYPE, sizeof(system_info.build_type) - 1);
+    system_info.build_type[sizeof(system_info.build_type) - 1] = '\0';
 
     ESP_LOGI(TAG, "System Info:");
     ESP_LOGI(TAG, "  Unique ID: %s", system_info.unique_id);
@@ -97,6 +100,19 @@ esp_err_t system_control_erase_nvs(bool reboot)
         ESP_LOGI(TAG, "Rebooting in 1 second...");
         vTaskDelay(pdMS_TO_TICKS(1000));
         system_control_reboot();
+    } else {
+        // Keep system usable without reboot after erase
+        ret = nvs_flash_init();
+        if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+            ret = nvs_flash_erase();
+            if (ret == ESP_OK) {
+                ret = nvs_flash_init();
+            }
+        }
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to reinitialize NVS after erase: %s", esp_err_to_name(ret));
+            return ret;
+        }
     }
 
     return ESP_OK;

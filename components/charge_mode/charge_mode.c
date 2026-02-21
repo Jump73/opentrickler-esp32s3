@@ -17,6 +17,7 @@
 #include "nvs.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include <string.h>
 #include <inttypes.h>
 #include <stdlib.h>
@@ -115,8 +116,43 @@ static charge_mode_state_t_runtime runtime_state = {
     .charge_mode_state = CHARGE_MODE_EXIT,
     .current_weight = 0.0f,
     .profile_name = "Default",
-    .elapsed_time_seconds = 0.0f
+    .elapsed_time_seconds = 0.0f,
+    .settled_weight = 0.0f,
+    .settled_time_seconds = 0.0f
 };
+static SemaphoreHandle_t runtime_state_mutex = NULL;
+
+static inline void runtime_lock(void)
+{
+    if (runtime_state_mutex) {
+        xSemaphoreTake(runtime_state_mutex, portMAX_DELAY);
+    }
+}
+
+static inline void runtime_unlock(void)
+{
+    if (runtime_state_mutex) {
+        xSemaphoreGive(runtime_state_mutex);
+    }
+}
+
+static inline charge_mode_state_t runtime_get_state(void)
+{
+    charge_mode_state_t state;
+    runtime_lock();
+    state = runtime_state.charge_mode_state;
+    runtime_unlock();
+    return state;
+}
+
+static inline float runtime_get_target_weight(void)
+{
+    float target;
+    runtime_lock();
+    target = runtime_state.target_charge_weight;
+    runtime_unlock();
+    return target;
+}
 
 /* ══════════════════════ Charge Mode Event Bits ══════════════════════ */
 
@@ -137,7 +173,7 @@ static void stop_all_motors(void)
 /* Check if REST API changed state to EXIT (abort requested) */
 static inline bool exit_requested(void)
 {
-    return runtime_state.charge_mode_state == CHARGE_MODE_EXIT;
+    return runtime_get_state() == CHARGE_MODE_EXIT;
 }
 
 /* Set LED colour for charge mode status feedback.
@@ -172,13 +208,17 @@ static void charge_mode_reset_led(void)
  */
 static void do_wait_for_zero(void)
 {
-    ESP_LOGI(TAG, "State: WAIT_FOR_ZERO (target=%.3f)", runtime_state.target_charge_weight);
+    ESP_LOGI(TAG, "State: WAIT_FOR_ZERO (target=%.3f)", runtime_get_target_weight());
 
     // Set LED to not-ready colour (blue)
     charge_mode_set_led(charge_mode_config.neopixel_not_ready_colour);
 
     // Clear events from previous cycle
+    runtime_lock();
     runtime_state.charge_mode_event = 0;
+    runtime_state.settled_weight = 0.0f;
+    runtime_state.settled_time_seconds = 0.0f;
+    runtime_unlock();
 
     ring_buf_t data_buffer;
     ring_buf_init(&data_buffer, 10);
@@ -187,7 +227,7 @@ static void do_wait_for_zero(void)
         TickType_t tick_start = xTaskGetTickCount();
 
         // Guard: need a valid target weight
-        if (runtime_state.target_charge_weight <= 0.001f) {
+        if (runtime_get_target_weight() <= 0.001f) {
             vTaskDelay(pdMS_TO_TICKS(300));
             continue;
         }
@@ -196,7 +236,9 @@ static void do_wait_for_zero(void)
         float measurement;
         if (scale_block_wait_for_measurement(300, &measurement)) {
             ring_buf_push(&data_buffer, measurement);
+            runtime_lock();
             runtime_state.current_weight = measurement;
+            runtime_unlock();
         }
 
         // Check stop condition: 10 stable readings
@@ -207,7 +249,9 @@ static void do_wait_for_zero(void)
             if (sd < charge_mode_config.set_point_sd_margin &&
                 fabsf(mean) < charge_mode_config.set_point_mean_margin) {
                 ESP_LOGI(TAG, "Stable zero detected (mean=%.4f, sd=%.4f)", mean, sd);
+                runtime_lock();
                 runtime_state.charge_mode_state = CHARGE_MODE_WAIT_FOR_COMPLETE;
+                runtime_unlock();
                 return;
             }
         }
@@ -226,18 +270,27 @@ static void do_wait_for_zero(void)
  */
 static void do_wait_for_complete(void)
 {
-    ESP_LOGI(TAG, "State: WAIT_FOR_COMPLETE (target=%.3f)", runtime_state.target_charge_weight);
+    ESP_LOGI(TAG, "State: WAIT_FOR_COMPLETE (target=%.3f)", runtime_get_target_weight());
 
     // Set LED to under-charge colour (yellow) at start of charging
     charge_mode_set_led(charge_mode_config.neopixel_under_charge_colour);
 
-    float target = runtime_state.target_charge_weight;
+    float target = runtime_get_target_weight();
 
     // Get profile PID parameters
     profile_t *profile = profile_get_selected();
-    if (profile) {
-        strncpy(runtime_state.profile_name, profile->name, sizeof(runtime_state.profile_name) - 1);
+    if (!profile) {
+        ESP_LOGE(TAG, "No selected profile");
+        stop_all_motors();
+        runtime_lock();
+        runtime_state.charge_mode_state = CHARGE_MODE_EXIT;
+        runtime_unlock();
+        return;
     }
+    runtime_lock();
+    strncpy(runtime_state.profile_name, profile->name, sizeof(runtime_state.profile_name) - 1);
+    runtime_state.profile_name[sizeof(runtime_state.profile_name) - 1] = '\0';
+    runtime_unlock();
 
     // Get motor speed limits from motor config and profile
     motor_config_t coarse_cfg, fine_cfg;
@@ -271,7 +324,9 @@ static void do_wait_for_complete(void)
 
 
     // Reset timer
+    runtime_lock();
     runtime_state.elapsed_time_seconds = 0.0f;
+    runtime_unlock();
     TickType_t charge_start_tick = xTaskGetTickCount();
 
     ESP_LOGI(TAG, "PID: coarse kp=%.3f ki=%.3f kd=%.3f speed=[%.2f..%.2f]",
@@ -304,11 +359,15 @@ static void do_wait_for_complete(void)
         }
 
         TickType_t current_tick = xTaskGetTickCount();
+        runtime_lock();
         runtime_state.current_weight = current_weight;
+        runtime_unlock();
 
         // Update elapsed time
+        runtime_lock();
         runtime_state.elapsed_time_seconds =
             (float)((current_tick - charge_start_tick) * portTICK_PERIOD_MS) / 1000.0f;
+        runtime_unlock();
 
         float error = target - current_weight;
 
@@ -336,7 +395,9 @@ static void do_wait_for_complete(void)
                 float settle_w;
                 if (scale_block_wait_for_measurement(200, &settle_w)) {
                     flow_model_record_sample(0.0f, settle_w);
+                    runtime_lock();
                     runtime_state.current_weight = settle_w;
+                    runtime_unlock();
                 }
             }
             flow_model_analyze_and_update(profile_get_selected_idx());
@@ -391,26 +452,53 @@ static void do_wait_for_complete(void)
 
     // Wait for weight to fully stabilize after motor stop.
     // Powder in the tube continues falling for 500-800ms after stop.
-    // Minimum 400ms, exits early once SD < 0.015gn over 10 consecutive reads, max 2500ms.
+    // Minimum 400ms, requires SD < 0.015gn for an extra confirm window, max 2500ms.
     flow_model_record_stop();
     {
         ring_buf_t settle_buf;
         ring_buf_init(&settle_buf, 10);
         TickType_t settle_start = xTaskGetTickCount();
+        TickType_t stable_since = 0;
+        bool stable_window_started = false;
         while (1) {
             float settle_w;
             if (scale_block_wait_for_measurement(200, &settle_w)) {
                 flow_model_record_sample(0.0f, settle_w);
                 ring_buf_push(&settle_buf, settle_w);
+                runtime_lock();
                 runtime_state.current_weight = settle_w;
+                runtime_unlock();
             }
-            uint32_t elapsed_ms = (uint32_t)((xTaskGetTickCount() - settle_start) * portTICK_PERIOD_MS);
-            if (elapsed_ms >= 400 && settle_buf.count >= 10 && ring_buf_sd(&settle_buf) < 0.015f) {
-                ESP_LOGI(TAG, "Weight stable: %.4f gn after %" PRIu32 "ms", runtime_state.current_weight, elapsed_ms);
-                break;
+            TickType_t now_tick = xTaskGetTickCount();
+            uint32_t elapsed_ms = (uint32_t)((now_tick - settle_start) * portTICK_PERIOD_MS);
+            bool stable_now = (settle_buf.count >= 10 && ring_buf_sd(&settle_buf) < 0.015f);
+
+            if (elapsed_ms >= 400 && stable_now) {
+                if (!stable_window_started) {
+                    stable_window_started = true;
+                    stable_since = now_tick;
+                } else {
+                    uint32_t stable_ms = (uint32_t)((now_tick - stable_since) * portTICK_PERIOD_MS);
+                    if (stable_ms >= 250) {
+                        runtime_lock();
+                        float stable_weight = runtime_state.current_weight;
+                        runtime_unlock();
+                        float stable_sd = ring_buf_sd(&settle_buf);
+                        ESP_LOGI(TAG, "Weight stable: %.4f gn (sd=%.4f) after %" PRIu32 "ms",
+                                 stable_weight, stable_sd, elapsed_ms);
+                        break;
+                    }
+                }
+            } else {
+                stable_window_started = false;
             }
+
             if (elapsed_ms >= 2500) {
-                ESP_LOGI(TAG, "Settle timeout at %.4f gn", runtime_state.current_weight);
+                runtime_lock();
+                float timeout_weight = runtime_state.current_weight;
+                runtime_unlock();
+                float timeout_sd = (settle_buf.count > 1) ? ring_buf_sd(&settle_buf) : 0.0f;
+                ESP_LOGI(TAG, "Settle timeout at %.4f gn (sd=%.4f)", timeout_weight, timeout_sd);
                 break;
             }
         }
@@ -421,18 +509,26 @@ static void do_wait_for_complete(void)
     // reflect the real outcome (overcharge visible) before WAIT_FOR_CUP_REMOVAL.
     // do_wait_for_cup_removal() will continue live reclassification from here.
     {
+        runtime_lock();
         float final_weight = runtime_state.current_weight;
+        runtime_unlock();
         float final_error = target - final_weight;
         if (final_error <= -charge_mode_config.fine_stop_threshold) {
+            runtime_lock();
             runtime_state.charge_mode_event = CHARGE_MODE_EVENT_OVER_CHARGE;
+            runtime_unlock();
             charge_mode_set_led(charge_mode_config.neopixel_over_charge_colour);
             ESP_LOGW(TAG, "POST-SETTLE: OVER CHARGE weight=%.4f error=%.4f", final_weight, final_error);
         } else if (final_error >= charge_mode_config.fine_stop_threshold) {
+            runtime_lock();
             runtime_state.charge_mode_event = CHARGE_MODE_EVENT_UNDER_CHARGE;
+            runtime_unlock();
             // LED stays yellow (under-charge colour set at charge start)
             ESP_LOGI(TAG, "POST-SETTLE: UNDER CHARGE weight=%.4f error=%.4f", final_weight, final_error);
         } else {
+            runtime_lock();
             runtime_state.charge_mode_event = 0;
+            runtime_unlock();
             charge_mode_set_led(charge_mode_config.neopixel_normal_charge_colour);
             ESP_LOGI(TAG, "POST-SETTLE: OK weight=%.4f error=%.4f", final_weight, final_error);
         }
@@ -440,8 +536,12 @@ static void do_wait_for_complete(void)
 
     // Stop timer
     TickType_t now = xTaskGetTickCount();
+    runtime_lock();
     runtime_state.elapsed_time_seconds =
         (float)((now - charge_start_tick) * portTICK_PERIOD_MS) / 1000.0f;
+    runtime_state.settled_weight = runtime_state.current_weight;
+    runtime_state.settled_time_seconds = runtime_state.elapsed_time_seconds;
+    runtime_unlock();
 
     // Precharge: run coarse motor briefly to pre-fill the tube for next charge
     if (charge_mode_config.precharge_enable) {
@@ -462,7 +562,9 @@ static void do_wait_for_complete(void)
     // colour (over/under/normal). This matches the original RP2040 behaviour.
 
     if (!exit_requested()) {
+        runtime_lock();
         runtime_state.charge_mode_state = CHARGE_MODE_WAIT_FOR_CUP_REMOVAL;
+        runtime_unlock();
     }
 }
 
@@ -488,7 +590,9 @@ static void do_wait_for_cup_removal(void)
         if (!scale_block_wait_for_measurement(200, &measurement)) {
             continue;
         }
+        runtime_lock();
         runtime_state.current_weight = measurement;
+        runtime_unlock();
         ring_buf_push(&data_buffer, measurement);
 
         // Stop condition: 5 stable readings with very negative mean (cup removed)
@@ -508,7 +612,9 @@ static void do_wait_for_cup_removal(void)
     charge_mode_reset_led();
 
     if (!exit_requested()) {
+        runtime_lock();
         runtime_state.charge_mode_state = CHARGE_MODE_WAIT_FOR_CUP_RETURN;
+        runtime_unlock();
     }
 }
 
@@ -530,7 +636,9 @@ static void do_wait_for_cup_return(void)
         if (!scale_block_wait_for_measurement(200, &measurement)) {
             continue;
         }
+        runtime_lock();
         runtime_state.current_weight = measurement;
+        runtime_unlock();
 
         // Cup returned when weight goes positive (cup on scale near zero)
         if (measurement >= 0.0f) {
@@ -545,7 +653,9 @@ static void do_wait_for_cup_return(void)
     charge_mode_reset_led();
 
     if (!exit_requested()) {
+        runtime_lock();
         runtime_state.charge_mode_state = CHARGE_MODE_WAIT_FOR_ZERO;
+        runtime_unlock();
     }
 }
 
@@ -556,7 +666,7 @@ static void charge_mode_task(void *pvParameters)
     ESP_LOGI(TAG, "Charge mode task started");
 
     while (1) {
-        switch (runtime_state.charge_mode_state) {
+        switch (runtime_get_state()) {
             case CHARGE_MODE_WAIT_FOR_ZERO:
                 do_wait_for_zero();
                 break;
@@ -595,6 +705,14 @@ esp_err_t charge_mode_init(void)
     ESP_LOGI(TAG, "Coarse threshold: %.3f, Fine threshold: %.3f",
              charge_mode_config.coarse_stop_threshold,
              charge_mode_config.fine_stop_threshold);
+
+    if (!runtime_state_mutex) {
+        runtime_state_mutex = xSemaphoreCreateMutex();
+        if (!runtime_state_mutex) {
+            ESP_LOGE(TAG, "Failed to create runtime state mutex");
+            return ESP_ERR_NO_MEM;
+        }
+    }
 
     BaseType_t ret = xTaskCreate(charge_mode_task, "charge_mode",
                                   TASK_STACK, NULL, TASK_PRIORITY, NULL);
@@ -675,35 +793,52 @@ esp_err_t charge_mode_get_config(charge_mode_config_t *config)
 esp_err_t charge_mode_set_target_weight(float weight)
 {
     ESP_LOGI(TAG, "Setting target weight to: %.3f", weight);
+    runtime_lock();
     runtime_state.target_charge_weight = weight;
+    runtime_unlock();
     return ESP_OK;
 }
 
 esp_err_t charge_mode_set_state(charge_mode_state_t state)
 {
-    ESP_LOGI(TAG, "Charge mode state: %d -> %d",
-             runtime_state.charge_mode_state, state);
+    charge_mode_state_t prev_state;
+    runtime_lock();
+    prev_state = runtime_state.charge_mode_state;
+    runtime_unlock();
 
-    if (state == CHARGE_MODE_EXIT && runtime_state.charge_mode_state != CHARGE_MODE_EXIT) {
+    ESP_LOGI(TAG, "Charge mode state: %d -> %d",
+             prev_state, state);
+
+    if (state == CHARGE_MODE_EXIT && prev_state != CHARGE_MODE_EXIT) {
         ESP_LOGI(TAG, "Exiting charge mode - stopping motors");
         stop_all_motors();
+        runtime_lock();
         runtime_state.elapsed_time_seconds = 0.0f;
+        runtime_state.settled_weight = 0.0f;
+        runtime_state.settled_time_seconds = 0.0f;
+        runtime_unlock();
     }
 
+    runtime_lock();
     runtime_state.charge_mode_state = state;
+    runtime_unlock();
     return ESP_OK;
 }
 
 esp_err_t charge_mode_get_runtime_state(charge_mode_state_t_runtime *state)
 {
     if (!state) return ESP_ERR_INVALID_ARG;
+    runtime_lock();
     *state = runtime_state;
+    runtime_unlock();
     return ESP_OK;
 }
 
 void charge_mode_clear_events(void)
 {
+    runtime_lock();
     runtime_state.charge_mode_event = 0;
+    runtime_unlock();
 }
 
 uint32_t hex_string_to_decimal(const char *string)

@@ -326,3 +326,8 @@ Persist per-dispense summary in compact ring buffer (NVS or RAM+periodic flush):
 `{timestamp, profile, phase_times, overshoot, e_final, model_confidence, delay, inflight, gains, autotune_flag}`.
 
 This enables objective pass/fail and future offline tuning without heavy on-device computation.
+## TODO - do zrobienia
+
+1. Zintegrować model przepływu z algorytmem sterowania (feedforward), bo obecnie w `charge_mode` sterowanie działa jako czyste PD mimo uczenia i logowania modelu.
+2. Uzupełnić pełną obsługę `POST` body w serwerze HTTP (`components/http_server/http_server_ot.c`) zamiast samego logowania payloadu.
+3. Usunąć logowanie haseł WiFi/AP wprost do logów (`components/wifi_manager/wifi_manager.c`) i zastąpić je maskowaniem.

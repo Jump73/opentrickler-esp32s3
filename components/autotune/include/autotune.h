@@ -93,13 +93,32 @@ typedef struct {
     float elapsed_s;
 } autotune_trial_result_t;
 
+// Telemetry entry for one autotune dispense run
+typedef struct {
+    uint32_t timestamp_ms;
+    uint8_t stage;        // 1 = coarse, 2 = fine
+    uint8_t phase;        // 0 = search, 1 = confirm, 2 = speed_probe
+    float kp;
+    float kd;
+    float settled_weight;
+    float elapsed_s;
+    float overshoot;
+    float abs_weight_error;
+    float quality;        // flow-model quality score (0..1)
+    bool accepted;        // passed stage acceptance gate
+} autotune_telemetry_entry_t;
+
 esp_err_t autotune_init(void);
 esp_err_t autotune_start(const autotune_request_t *request);
 esp_err_t autotune_get_status(autotune_status_t *status);
 esp_err_t autotune_cancel(void);
+esp_err_t autotune_finish_now(void);
 
 // Get trial results for current stage. Returns number of trials copied.
 int autotune_get_trials(autotune_trial_result_t *out, int max_count);
+
+// Get telemetry entries for current autotune session. Returns number of copied entries.
+int autotune_get_telemetry(autotune_telemetry_entry_t *out, int max_count);
 
 #ifdef __cplusplus
 }

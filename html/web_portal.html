@@ -282,29 +282,13 @@
                             <span class="label-text text-xs">Time Tolerance (s, excess allowed)</span>
                             <input id="atParamA7" type="number" class="input input-bordered input-sm w-full" step="0.1" value="2.0">
                         </div>
-                        <div>
-                            <span class="label-text text-xs">Auto-Apply Best PID</span>
-                            <select id="atParamA8" class="select select-bordered select-sm w-full">
-                                <option value="true">Yes</option>
-                                <option value="false">No</option>
-                            </select>
-                        </div>
-                    </div>
-
-                    <div class="grid grid-cols-2 gap-x-2 gap-y-1 mt-1">
-                        <div>
-                            <span class="label-text text-xs">Save to EEPROM</span>
-                            <select id="atParamEE" class="select select-bordered select-sm w-full">
-                                <option value="true">Yes</option>
-                                <option value="false">No</option>
-                            </select>
-                        </div>
                     </div>
                 </div>
 
                 <!-- Start / Cancel / Save buttons -->
-                <div class="grid grid-cols-2 gap-2 mt-1">
+                <div class="grid grid-cols-3 gap-2 mt-1">
                     <button id="autotuneStartBtn" class="btn btn-primary btn-sm" onclick="autotuneStart()">Start</button>
+                    <button id="autotuneFinishBtn" class="btn btn-accent btn-sm" onclick="autotuneFinishNow()" disabled="disabled">Finish now</button>
                     <button id="autotuneCancelBtn" class="btn btn-warning btn-sm" onclick="autotuneCancel()" disabled="disabled">Cancel</button>
                 </div>
 
@@ -1118,9 +1102,9 @@
 
     var pollSetTimeoutId;
     var _lastChargeState = 0;
-    var _lastRemoveCupWeight = null;
-    var _lastRemoveCupTarget = null;
-    var _lastRemoveCupTime = null;
+    var _lastSettledWeight = null;
+    var _lastSettledTarget = null;
+    var _lastSettledTime = null;
     var chargeHistory = [];
 
     // Load fine_stop_threshold from charge mode config (used for over/under display)
@@ -1325,6 +1309,8 @@
             const charge_mode_event = data["s3"];
             const profile_name = data["s4"];
             const charge_time_seconds = data["s5"] || "-.--";
+            const settled_weight = data["s6"];
+            const settled_time_seconds = data["s7"] || charge_time_seconds;
 
             var percentage = 0;
             if (charge_weight_set_point == 0) {
@@ -1358,18 +1344,11 @@
             // Show over/under/ok only during REMOVE_CUP state, clear otherwise.
             var banner = document.getElementById("chargeResultBanner");
             var resultText = document.getElementById("chargeResultText");
-            if (charge_mode_state == ChargeModeState.REMOVE_CUP &&
-                charge_weight_set_point > 0 &&
-                typeof current_charge_weight === 'number' && !isNaN(current_charge_weight) &&
-                current_charge_weight >= charge_weight_set_point * 0.5) {
-                var error = charge_weight_set_point - current_charge_weight;
-                // Use fine_stop_threshold logic (same as display and LED).
-                // We approximate using the threshold from the REST config (loaded at startup).
-                var threshold = window._fineStopThreshold || 0.03;
-                if (error <= -threshold) {
+            if (charge_mode_state == ChargeModeState.REMOVE_CUP) {
+                if ((charge_mode_event & ChargeModeEvent.OVER_CHARGE) !== 0) {
                     resultText.textContent = "OVER CHARGE";
                     banner.className = "alert alert-error text-center font-bold text-lg justify-center";
-                } else if (error >= threshold) {
+                } else if ((charge_mode_event & ChargeModeEvent.UNDER_CHARGE) !== 0) {
                     resultText.textContent = "UNDER CHARGE";
                     banner.className = "alert alert-warning text-center font-bold text-lg justify-center";
                 } else {
@@ -1381,28 +1360,24 @@
                 resultText.textContent = "";
             }
 
-            // Track weight during REMOVE_CUP state (powder settling).
-            // Keep updating as long as weight stays near target (within 1gn).
-            // This captures the true settled weight, not the instant motor-stop reading.
+            // Track settled result from firmware (latched post-settle value).
             if (charge_mode_state == ChargeModeState.REMOVE_CUP &&
                 charge_weight_set_point > 0 &&
-                typeof current_charge_weight === 'number' && !isNaN(current_charge_weight)) {
-                if (_lastRemoveCupWeight === null ||
-                    Math.abs(current_charge_weight - charge_weight_set_point) < 1.0) {
-                    _lastRemoveCupWeight = current_charge_weight;
-                    _lastRemoveCupTarget = charge_weight_set_point;
-                    _lastRemoveCupTime = charge_time_seconds;
-                }
+                typeof settled_weight === 'number' && !isNaN(settled_weight) &&
+                settled_weight > 0.0) {
+                _lastSettledWeight = settled_weight;
+                _lastSettledTarget = charge_weight_set_point;
+                _lastSettledTime = settled_time_seconds;
             }
 
             // Record result at transition REMOVE_CUP -> RETURN_CUP
             if (_lastChargeState == ChargeModeState.REMOVE_CUP &&
                 charge_mode_state == ChargeModeState.RETURN_CUP &&
-                _lastRemoveCupWeight !== null) {
-                _addChargeResult(_lastRemoveCupTarget, _lastRemoveCupWeight, _lastRemoveCupTime);
-                _lastRemoveCupWeight = null;
-                _lastRemoveCupTarget = null;
-                _lastRemoveCupTime = null;
+                _lastSettledWeight !== null) {
+                _addChargeResult(_lastSettledTarget, _lastSettledWeight, _lastSettledTime);
+                _lastSettledWeight = null;
+                _lastSettledTarget = null;
+                _lastSettledTime = null;
             }
             _lastChargeState = charge_mode_state;
         })
@@ -2101,10 +2076,8 @@
             const a6 = document.getElementById("atParamA6").value;
             const a9 = document.getElementById("atParamA9").value;
             const a7 = document.getElementById("atParamA7").value;
-            const a8 = document.getElementById("atParamA8").value;
-            const ee = document.getElementById("atParamEE").value;
 
-            const uri = `/rest/autotune_coarse?a0=true&a1=${encodeURIComponent(a1)}&a2=${encodeURIComponent(a2)}&a3=${encodeURIComponent(a3)}&a5=${encodeURIComponent(a5)}&a6=${encodeURIComponent(a6)}&a9=${encodeURIComponent(a9)}&a7=${encodeURIComponent(a7)}&a8=${encodeURIComponent(a8)}&ee=${encodeURIComponent(ee)}`;
+            const uri = `/rest/autotune_coarse?a0=true&a1=${encodeURIComponent(a1)}&a2=${encodeURIComponent(a2)}&a3=${encodeURIComponent(a3)}&a5=${encodeURIComponent(a5)}&a6=${encodeURIComponent(a6)}&a9=${encodeURIComponent(a9)}&a7=${encodeURIComponent(a7)}&a8=false&ee=false`;
 
             return fetch(uri);
         })
@@ -2126,6 +2099,18 @@
         })
         .catch(error => {
             console.error("Error canceling autotune", error);
+        });
+    }
+
+    function autotuneFinishNow() {
+        const uri = `/rest/autotune_coarse?fn=true`;
+        fetch(uri)
+        .then(response => response.json())
+        .then(data => {
+            _restartAutotunePoll();
+        })
+        .catch(error => {
+            console.error("Error finishing autotune", error);
         });
     }
 
@@ -2250,6 +2235,7 @@
 
             const statusPanel = document.getElementById("autotuneStatusPanel");
             const startBtn = document.getElementById("autotuneStartBtn");
+            const finishBtn = document.getElementById("autotuneFinishBtn");
             const cancelBtn = document.getElementById("autotuneCancelBtn");
             const saveBtn = document.getElementById("autotuneSaveBtn");
 
@@ -2263,10 +2249,12 @@
             // Button state
             if (state == AutotuneState.RUNNING) {
                 startBtn.disabled = true;
+                finishBtn.disabled = false;
                 cancelBtn.disabled = false;
                 saveBtn.style.display = "none";
             } else {
                 startBtn.disabled = false;
+                finishBtn.disabled = true;
                 cancelBtn.disabled = true;
                 // Show save button only when autotune completed successfully
                 saveBtn.style.display = (state == AutotuneState.DONE) ? "block" : "none";

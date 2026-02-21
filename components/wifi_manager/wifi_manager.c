@@ -32,6 +32,7 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
         esp_wifi_connect();
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+        xEventGroupClearBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
         if (s_retry_num < MAX_RETRY) {
             esp_wifi_connect();
             s_retry_num++;
@@ -187,6 +188,14 @@ esp_err_t wifi_manager_start_sta(const char *ssid, const char *password, uint32_
 {
     // Create STA netif
     s_netif = esp_netif_create_default_wifi_sta();
+    if (!s_netif) {
+        ESP_LOGE(TAG, "Failed to create STA netif");
+        return ESP_FAIL;
+    }
+
+    // New connection attempt: reset retry state and stale event bits
+    s_retry_num = 0;
+    xEventGroupClearBits(s_wifi_event_group, WIFI_CONNECTED_BIT | WIFI_FAIL_BIT);
 
     // Register event handlers
     ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT,
@@ -222,7 +231,7 @@ esp_err_t wifi_manager_start_sta(const char *ssid, const char *password, uint32_
     // Wait for connection or timeout
     EventBits_t bits = xEventGroupWaitBits(s_wifi_event_group,
             WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
-            pdFALSE,
+            pdTRUE,
             pdFALSE,
             pdMS_TO_TICKS(timeout_ms));
 

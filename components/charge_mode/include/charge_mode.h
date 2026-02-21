@@ -65,6 +65,8 @@ typedef struct {
     float current_weight;
     char profile_name[32];
     float elapsed_time_seconds;
+    float settled_weight;
+    float settled_time_seconds;
 } charge_mode_state_t_runtime;
 
 // Initialize charge mode module

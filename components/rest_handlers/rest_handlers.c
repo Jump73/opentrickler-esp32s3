@@ -8,6 +8,7 @@
 #include "neopixel_led.h"
 #include "system_control.h"
 #include "autotune.h"
+#include "flow_model.h"
 #include "ui_screens.h"
 #include "lvgl_port.h"
 #include "esp_log.h"
@@ -636,7 +637,7 @@ char* rest_charge_mode_config_handler(int num_params, char *params[], char *valu
 // Charge mode state handler
 char* rest_charge_mode_state_handler(int num_params, char *params[], char *values[])
 {
-    static char charge_mode_state_json_buffer[256];
+    static char charge_mode_state_json_buffer[320];
     charge_mode_state_t_runtime runtime_state = {0};
 
     charge_mode_get_runtime_state(&runtime_state);
@@ -687,15 +688,23 @@ char* rest_charge_mode_state_handler(int num_params, char *params[], char *value
     char elapsed_time_buffer[16];
     snprintf(elapsed_time_buffer, sizeof(elapsed_time_buffer), "%.2f", runtime_state.elapsed_time_seconds);
 
+    // Settled (post-settle) values for the just-completed charge cycle.
+    char settled_weight_buffer[16];
+    char settled_time_buffer[16];
+    snprintf(settled_weight_buffer, sizeof(settled_weight_buffer), "%.3f", runtime_state.settled_weight);
+    snprintf(settled_time_buffer, sizeof(settled_time_buffer), "%.2f", runtime_state.settled_time_seconds);
+
     // Return state
     snprintf(charge_mode_state_json_buffer, sizeof(charge_mode_state_json_buffer),
-             "{\"s0\":%.3f,\"s1\":%s,\"s2\":%d,\"s3\":%lu,\"s4\":\"%s\",\"s5\":\"%s\"}",
+             "{\"s0\":%.3f,\"s1\":%s,\"s2\":%d,\"s3\":%lu,\"s4\":\"%s\",\"s5\":\"%s\",\"s6\":%s,\"s7\":\"%s\"}",
              runtime_state.target_charge_weight,
              weight_string,
              (int)runtime_state.charge_mode_state,
              runtime_state.charge_mode_event,
              runtime_state.profile_name,
-             elapsed_time_buffer);
+             elapsed_time_buffer,
+             settled_weight_buffer,
+             settled_time_buffer);
 
     // Events persist until next charge cycle (cleared in do_wait_for_zero).
     // Web UI now calculates over/under inline from weight data, so events
@@ -722,6 +731,11 @@ char* rest_profile_config_handler(int num_params, char *params[], char *values[]
                 return profile_config_json_buffer;
             }
             profile_select(profile_idx);
+            esp_err_t fm_ret = flow_model_load(profile_idx);
+            if (fm_ret != ESP_OK) {
+                ESP_LOGW(TAG, "Failed to load flow model for profile %u: %s",
+                         profile_idx, esp_err_to_name(fm_ret));
+            }
             config_changed = true;
             break;
         }
@@ -892,6 +906,7 @@ char* rest_autotune_coarse_handler(int num_params, char *params[], char *values[
 
     bool start = false;
     bool cancel = false;
+    bool finish_now = false;
 
     autotune_request_t request = {
         .coarse_target_weight = 18.5f,
@@ -939,10 +954,16 @@ char* rest_autotune_coarse_handler(int num_params, char *params[], char *values[
         else if (strcmp(params[idx], "ca") == 0) {
             cancel = string_to_boolean(values[idx]);
         }
+        else if (strcmp(params[idx], "fn") == 0) {
+            finish_now = string_to_boolean(values[idx]);
+        }
     }
 
     if (cancel) {
         autotune_cancel();
+    }
+    if (finish_now) {
+        autotune_finish_now();
     }
 
     if (start) {
@@ -1028,6 +1049,51 @@ char* rest_autotune_trials_handler(int num_params, char *params[], char *values[
              "],\"count\":%d}", count);
 
     return trials_json_buffer;
+}
+
+// Autotune telemetry endpoint - returns compact telemetry entries
+// Optional param: n=max entries (default 64, max 128)
+char* rest_autotune_telemetry_handler(int num_params, char *params[], char *values[])
+{
+    static char telemetry_json_buffer[12288];
+    static autotune_telemetry_entry_t entries[128];
+
+    int max_entries = 64;
+    for (int idx = 0; idx < num_params; idx++) {
+        if (strcmp(params[idx], "n") == 0) {
+            max_entries = atoi(values[idx]);
+        }
+    }
+    if (max_entries < 1) max_entries = 1;
+    if (max_entries > 128) max_entries = 128;
+
+    int count = autotune_get_telemetry(entries, max_entries);
+
+    int offset = snprintf(telemetry_json_buffer, sizeof(telemetry_json_buffer), "{\"telemetry\":[");
+    for (int i = 0; i < count; i++) {
+        offset += snprintf(telemetry_json_buffer + offset,
+                           sizeof(telemetry_json_buffer) - offset,
+                           "%s{\"t\":%lu,\"s\":%d,\"p\":%d,\"kp\":%.5f,\"kd\":%.5f,"
+                           "\"w\":%.4f,\"dt\":%.3f,\"os\":%.4f,\"we\":%.4f,\"q\":%.3f,\"ok\":%s}",
+                           (i > 0) ? "," : "",
+                           (unsigned long)entries[i].timestamp_ms,
+                           (int)entries[i].stage,
+                           (int)entries[i].phase,
+                           entries[i].kp,
+                           entries[i].kd,
+                           entries[i].settled_weight,
+                           entries[i].elapsed_s,
+                           entries[i].overshoot,
+                           entries[i].abs_weight_error,
+                           entries[i].quality,
+                           boolean_to_string(entries[i].accepted));
+        if (offset >= (int)sizeof(telemetry_json_buffer) - 16) break;
+    }
+
+    snprintf(telemetry_json_buffer + offset,
+             sizeof(telemetry_json_buffer) - offset,
+             "],\"count\":%d}", count);
+    return telemetry_json_buffer;
 }
 
 // Cleanup mode state handler

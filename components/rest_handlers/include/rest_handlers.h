@@ -59,6 +59,7 @@ char* rest_autotune_coarse_handler(int num_params, char *params[], char *values[
 
 // Autotune trial history endpoint - returns JSON array of all trials for current stage
 char* rest_autotune_trials_handler(int num_params, char *params[], char *values[]);
+char* rest_autotune_telemetry_handler(int num_params, char *params[], char *values[]);
 
 // Cleanup mode state endpoint
 // State parameters: s0=state(int), s1=trickler_speed(float)

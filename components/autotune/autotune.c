@@ -7,6 +7,7 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include <math.h>
 #include <string.h>
 
@@ -17,6 +18,14 @@ static const char *TAG = "Autotune";
 
 // Fine motor trickle threshold (shared with charge_mode logic)
 #define FINE_TRICKLE_THRESHOLD_GN 0.3f
+// Coarse target must stay below fine target by at least this margin.
+#define AUTOTUNE_STAGE_TARGET_MIN_GAP_GN 0.05f
+#define AUTOTUNE_STABLE_CONFIRM_RUNS 3
+#define AUTOTUNE_SPEED_PROBE_ATTEMPTS 3
+#define AUTOTUNE_SPEED_PROBE_GAIN_STEP 0.12f
+#define AUTOTUNE_MIN_SPEED_GAIN_S 0.10f
+#define AUTOTUNE_TELEMETRY_MAX 128
+#define AUTOTUNE_MIN_ACCEPT_QUALITY 0.45f
 
 typedef struct {
     float data[10];
@@ -29,6 +38,115 @@ static autotune_status_t s_status = {
 };
 static autotune_request_t s_request = {0};
 static TaskHandle_t s_task_handle = NULL;
+static SemaphoreHandle_t s_autotune_mutex = NULL;
+static autotune_telemetry_entry_t s_telemetry[AUTOTUNE_TELEMETRY_MAX];
+static int s_telemetry_count = 0;
+static bool s_finish_now_requested = false;
+
+static inline void autotune_lock(void)
+{
+    if (s_autotune_mutex) {
+        xSemaphoreTake(s_autotune_mutex, portMAX_DELAY);
+    }
+}
+
+static inline void autotune_unlock(void)
+{
+    if (s_autotune_mutex) {
+        xSemaphoreGive(s_autotune_mutex);
+    }
+}
+
+static inline bool autotune_is_running(void)
+{
+    bool running;
+    autotune_lock();
+    running = (s_status.state == AUTOTUNE_STATE_RUNNING);
+    autotune_unlock();
+    return running;
+}
+
+static bool autotune_take_finish_now_request(void)
+{
+    bool requested = false;
+    autotune_lock();
+    if (s_finish_now_requested) {
+        requested = true;
+        s_finish_now_requested = false;
+    }
+    autotune_unlock();
+    return requested;
+}
+
+static inline void autotune_set_current_weight(float weight)
+{
+    autotune_lock();
+    s_status.current_weight = weight;
+    autotune_unlock();
+}
+
+static void telemetry_reset(void)
+{
+    autotune_lock();
+    s_telemetry_count = 0;
+    memset(s_telemetry, 0, sizeof(s_telemetry));
+    autotune_unlock();
+}
+
+static void telemetry_add(uint8_t stage, uint8_t phase, float kp, float kd,
+                          float settled_weight, float elapsed_s, float overshoot,
+                          float abs_weight_error, float quality, bool accepted)
+{
+    autotune_lock();
+    if (s_telemetry_count < AUTOTUNE_TELEMETRY_MAX) {
+        s_telemetry[s_telemetry_count++] = (autotune_telemetry_entry_t){
+            .timestamp_ms = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS),
+            .stage = stage,
+            .phase = phase,
+            .kp = kp,
+            .kd = kd,
+            .settled_weight = settled_weight,
+            .elapsed_s = elapsed_s,
+            .overshoot = overshoot,
+            .abs_weight_error = abs_weight_error,
+            .quality = quality,
+            .accepted = accepted,
+        };
+    }
+    autotune_unlock();
+}
+
+static float telemetry_recent_quality_mean(uint8_t stage, int max_samples)
+{
+    float sum = 0.0f;
+    int count = 0;
+
+    autotune_lock();
+    for (int i = s_telemetry_count - 1; i >= 0 && count < max_samples; i--) {
+        if (s_telemetry[i].stage == stage) {
+            sum += s_telemetry[i].quality;
+            count++;
+        }
+    }
+    autotune_unlock();
+
+    if (count == 0) {
+        return 0.8f;
+    }
+    return sum / (float)count;
+}
+
+static float get_stage_quality(uint8_t stage)
+{
+    flow_model_t fm = {0};
+    if (flow_model_get(profile_get_selected_idx(), &fm) != ESP_OK) {
+        return 0.0f;
+    }
+    if (stage == AUTOTUNE_STAGE_COARSE) {
+        return fm.coarse.last_quality;
+    }
+    return fm.fine.last_quality;
+}
 
 static inline float clampf(float value, float min_v, float max_v)
 {
@@ -85,17 +203,19 @@ static bool wait_for_stable_zero(void)
     int consecutive_stable = 0;    // need 2 consecutive stable full buffers
     const int required_stable = 2;
 
+    autotune_lock();
     s_status.substatus = AUTOTUNE_SUB_STABILIZING;
+    autotune_unlock();
 
     TickType_t start = xTaskGetTickCount();
     while (1) {
-        if (s_status.state != AUTOTUNE_STATE_RUNNING) {
+        if (!autotune_is_running()) {
             return false;
         }
 
         float m = 0.0f;
         if (scale_block_wait_for_measurement(300, &m)) {
-            s_status.current_weight = m;
+            autotune_set_current_weight(m);
             float_buf_push(&buf, m);
 
             TickType_t elapsed_ms = (xTaskGetTickCount() - start) * portTICK_PERIOD_MS;
@@ -126,18 +246,21 @@ static bool wait_for_stable_zero(void)
 static bool wait_cup_removal_return_cycle(void)
 {
     // Phase 1: REMOVE_CUP - wait for weight to drop significantly (cup removed)
+    autotune_lock();
     s_status.substatus = AUTOTUNE_SUB_REMOVE_CUP;
     strncpy(s_status.message, "Remove cup", sizeof(s_status.message) - 1);
+    s_status.message[sizeof(s_status.message) - 1] = '\0';
+    autotune_unlock();
 
     bool cup_removed = false;
     while (!cup_removed) {
-        if (s_status.state != AUTOTUNE_STATE_RUNNING) {
+        if (!autotune_is_running()) {
             return false;
         }
 
         float m = 0.0f;
         if (scale_block_wait_for_measurement(300, &m)) {
-            s_status.current_weight = m;
+            autotune_set_current_weight(m);
             // Cup is considered removed when weight drops below 0.5g
             if (m < 0.5f) {
                 cup_removed = true;
@@ -151,18 +274,21 @@ static bool wait_cup_removal_return_cycle(void)
     // Small delay to let user empty the cup
     vTaskDelay(pdMS_TO_TICKS(500));
 
+    autotune_lock();
     s_status.substatus = AUTOTUNE_SUB_RETURN_CUP;
     strncpy(s_status.message, "Return cup", sizeof(s_status.message) - 1);
+    s_status.message[sizeof(s_status.message) - 1] = '\0';
+    autotune_unlock();
 
     bool cup_returned = false;
     while (!cup_returned) {
-        if (s_status.state != AUTOTUNE_STATE_RUNNING) {
+        if (!autotune_is_running()) {
             return false;
         }
 
         float m = 0.0f;
         if (scale_block_wait_for_measurement(300, &m)) {
-            s_status.current_weight = m;
+            autotune_set_current_weight(m);
             // Cup returned when any positive weight detected (cup on scale)
             // But we accept near-zero too since an empty cup is very light
             // We detect "returned" by checking for a brief stable reading
@@ -176,8 +302,11 @@ static bool wait_cup_removal_return_cycle(void)
     }
 
     // Phase 3: STABILIZING - wait for stable zero reading
+    autotune_lock();
     s_status.substatus = AUTOTUNE_SUB_STABILIZING;
     strncpy(s_status.message, "Stabilizing scale...", sizeof(s_status.message) - 1);
+    s_status.message[sizeof(s_status.message) - 1] = '\0';
+    autotune_unlock();
 
     return wait_for_stable_zero();
 }
@@ -206,7 +335,7 @@ static float wait_for_settled_weight(float initial_weight, int timeout_ms)
         float m = 0.0f;
         if (scale_block_wait_for_measurement(200, &m)) {
             settled = m;
-            s_status.current_weight = m;
+            autotune_set_current_weight(m);
 
             TickType_t elapsed_ms = (xTaskGetTickCount() - start) * portTICK_PERIOD_MS;
 
@@ -266,7 +395,7 @@ static bool run_single_motor_dispense(motor_type_t motor,
     flow_model_record_start(motor);
 
     while (1) {
-        if (s_status.state != AUTOTUNE_STATE_RUNNING) {
+        if (!autotune_is_running()) {
             flow_model_record_stop();
             stop_all();
             return false;
@@ -291,8 +420,10 @@ static bool run_single_motor_dispense(motor_type_t motor,
         float cur_elapsed = (float)((now - start_tick) * portTICK_PERIOD_MS) / 1000.0f;
 
         // Update live readings for UI
+        autotune_lock();
         s_status.current_weight = weight;
         s_status.current_elapsed_s = cur_elapsed;
+        autotune_unlock();
 
         float error = target_weight - weight;
         if (error <= stop_threshold) {
@@ -314,7 +445,7 @@ static bool run_single_motor_dispense(motor_type_t motor,
             }
             // Wait for scale to settle after motor inertia
             *final_w = wait_for_settled_weight(weight, settle_timeout_ms);
-            s_status.current_weight = *final_w;
+            autotune_set_current_weight(*final_w);
             // Overshoot = how much above target the settled weight is (positive = over)
             if (*final_w > peak_weight) peak_weight = *final_w;
             *max_overshoot = peak_weight - target_weight;
@@ -365,7 +496,7 @@ static bool run_single_motor_dispense(motor_type_t motor,
             }
             // Wait for scale to settle after motor inertia
             *final_w = wait_for_settled_weight(weight, settle_timeout_ms);
-            s_status.current_weight = *final_w;
+            autotune_set_current_weight(*final_w);
             if (*final_w > peak_weight) peak_weight = *final_w;
             *max_overshoot = peak_weight - target_weight;
             flow_model_analyze_and_update(profile_get_selected_idx());
@@ -383,6 +514,14 @@ static bool run_fine_stage_with_coarse_prefill(float coarse_kp,
                                                float *fine_overshoot,
                                                float *coarse_elapsed_out)
 {
+    if (s_request.coarse_target_weight >=
+        (s_request.fine_target_weight - AUTOTUNE_STAGE_TARGET_MIN_GAP_GN)) {
+        ESP_LOGE(TAG, "Invalid targets for coarse+fine: coarse=%.3f fine=%.3f (need coarse < fine by >= %.3f)",
+                 s_request.coarse_target_weight, s_request.fine_target_weight,
+                 AUTOTUNE_STAGE_TARGET_MIN_GAP_GN);
+        return false;
+    }
+
     profile_t *profile = profile_get_selected();
     if (!profile) {
         return false;
@@ -447,9 +586,11 @@ static bool run_fine_stage_with_coarse_prefill(float coarse_kp,
 
 static void autotune_finish_error(const char *msg)
 {
+    autotune_lock();
     s_status.state = AUTOTUNE_STATE_ERROR;
     strncpy(s_status.message, msg, sizeof(s_status.message) - 1);
     s_status.message[sizeof(s_status.message) - 1] = '\0';
+    autotune_unlock();
     stop_all();
 }
 
@@ -499,13 +640,16 @@ static int s_perturbation_idx;
 
 static void trials_reset(void)
 {
+    autotune_lock();
     s_trial_count = 0;
     s_perturbation_idx = 0;
+    autotune_unlock();
 }
 
 static void trials_add(uint8_t stage, float kp, float kd, float werr, float terr,
                         float overshoot, float settled_w, float elapsed)
 {
+    autotune_lock();
     if (s_trial_count < MAX_TRIALS) {
         s_trials[s_trial_count] = (trial_t){
             .stage = stage,
@@ -518,6 +662,7 @@ static void trials_add(uint8_t stage, float kp, float kd, float werr, float terr
         ESP_LOGI(TAG, "trials_add: stage=%d count=%d kp=%.4f kd=%.4f werr=%.4f",
                  stage, s_trial_count, kp, kd, werr);
     }
+    autotune_unlock();
 }
 
 // Lexicographic comparison: weight accuracy first, then time.
@@ -658,10 +803,47 @@ static bool tune_coarse_stage(profile_t *profile,
     // First run uses base parameters (the parent)
     float kp = kp_base;
     float kd = kd_base;
+    float stable_kp = kp_base;
+    float stable_kd = kd_base;
+    float stable_time_s = 1e9f;
+    float stable_abs_werr = 1e9f;
+    float confirmed_kp = kp_base;
+    float confirmed_kd = kd_base;
+    float confirmed_time_s = 1e9f;
+    float confirmed_abs_werr = 1e9f;
+    bool confirmed_ready = false;
+    float fallback_kp = kp_base;
+    float fallback_kd = kd_base;
+    float fallback_time_s = 1e9f;
+    float fallback_abs_werr = 1e9f;
+    int stable_confirmations = 0;
+    int speed_probe_idx = 0;
+    bool reconfirming_speed_candidate = false;
+
+    typedef enum {
+        COARSE_PHASE_SEARCH = 0,
+        COARSE_PHASE_CONFIRM = 1,
+        COARSE_PHASE_SPEED_PROBE = 2,
+    } coarse_phase_t;
+    coarse_phase_t phase = COARSE_PHASE_SEARCH;
 
     for (int run = 1; run <= s_request.max_runs_per_stage; run++) {
+        if (autotune_take_finish_now_request()) {
+            ESP_LOGI(TAG, "Finish-now requested during COARSE: proceeding to FINE");
+            autotune_lock();
+            strncpy(s_status.message, "Finish-now: moving to fine stage",
+                    sizeof(s_status.message) - 1);
+            s_status.message[sizeof(s_status.message) - 1] = '\0';
+            autotune_unlock();
+            tolerance_reached = true;
+            break;
+        }
+
         if (run == 1) {
+            autotune_lock();
             strncpy(s_status.message, "Waiting for stable reading...", sizeof(s_status.message) - 1);
+            s_status.message[sizeof(s_status.message) - 1] = '\0';
+            autotune_unlock();
             if (!wait_for_stable_zero()) {
                 return false;
             }
@@ -671,6 +853,7 @@ static bool tune_coarse_stage(profile_t *profile,
             }
         }
 
+        autotune_lock();
         s_status.stage = AUTOTUNE_STAGE_COARSE;
         s_status.stage_run = run;
         s_status.stage_max_runs = s_request.max_runs_per_stage;
@@ -678,6 +861,7 @@ static bool tune_coarse_stage(profile_t *profile,
         s_status.active_kd = kd;
         s_status.substatus = AUTOTUNE_SUB_DISPENSING;
         snprintf(s_status.message, sizeof(s_status.message), "COARSE run %d/%d", run, s_request.max_runs_per_stage);
+        autotune_unlock();
 
         float final_w = 0.0f;
         float elapsed_s = 0.0f;
@@ -693,8 +877,10 @@ static bool tune_coarse_stage(profile_t *profile,
             return false;
         }
 
+        autotune_lock();
         s_status.last_weight = final_w;
         s_status.last_elapsed_s = elapsed_s;
+        autotune_unlock();
 
         float werr = final_w - s_request.coarse_target_weight;
         float abs_werr = fabsf(werr);
@@ -711,27 +897,186 @@ static bool tune_coarse_stage(profile_t *profile,
             *best_kd = kd;
             *best_abs_werr = abs_werr;
             *best_abs_terr = elapsed_s;  // store coarse elapsed for reference
+            autotune_lock();
             s_status.coarse_best_kp = kp;
             s_status.coarse_best_kd = kd;
             s_status.coarse_best_weight_error = abs_werr;
             s_status.coarse_best_time_error = elapsed_s;
+            autotune_unlock();
         }
 
+        autotune_lock();
         s_status.runs_done++;
         s_status.progress_pct = ((float)s_status.runs_done / (float)s_status.runs_total) * 100.0f;
+        autotune_unlock();
 
         ESP_LOGI(TAG, "COARSE run %d/%d: kp=%.5f kd=%.5f w=%.4f t=%.2f werr=%.4f os=%.4f",
                  run, s_request.max_runs_per_stage, kp, kd, final_w, elapsed_s, abs_werr, overshoot);
 
-        // Coarse tolerance: weight only (time is evaluated at total cycle level in fine stage)
-        if (abs_werr <= s_request.coarse_weight_tolerance) {
-            ESP_LOGI(TAG, "COARSE tuned to weight tolerance on run %d", run);
+        if (autotune_take_finish_now_request()) {
+            ESP_LOGI(TAG, "Finish-now requested in COARSE: using current coarse result and moving to FINE");
+            autotune_lock();
+            strncpy(s_status.message, "Finish-now: moving to fine stage",
+                    sizeof(s_status.message) - 1);
+            s_status.message[sizeof(s_status.message) - 1] = '\0';
+            autotune_unlock();
             tolerance_reached = true;
             break;
         }
 
-        // Generate next candidate using (1+1)-ES
-        es_generate_candidate(&kp, &kd, kp_min, kp_max, kd_min, kd_max);
+        // Coarse acceptance: require both settled weight accuracy and limited overshoot.
+        float positive_overshoot = fmaxf(0.0f, overshoot);
+        float run_quality = get_stage_quality(AUTOTUNE_STAGE_COARSE);
+        float quality_floor = fmaxf(AUTOTUNE_MIN_ACCEPT_QUALITY, telemetry_recent_quality_mean(AUTOTUNE_STAGE_COARSE, 8) * 0.70f);
+        bool accepted = (abs_werr <= s_request.coarse_weight_tolerance) &&
+                        (positive_overshoot <= s_request.coarse_weight_tolerance) &&
+                        (run_quality >= quality_floor);
+        telemetry_add(AUTOTUNE_STAGE_COARSE, (uint8_t)phase, kp, kd, final_w, elapsed_s,
+                      overshoot, abs_werr, run_quality, accepted);
+
+        if (phase == COARSE_PHASE_SEARCH) {
+            if (accepted) {
+                stable_kp = kp;
+                stable_kd = kd;
+                stable_time_s = elapsed_s;
+                stable_abs_werr = abs_werr;
+                stable_confirmations = 1;
+                speed_probe_idx = 0;
+                phase = COARSE_PHASE_CONFIRM;
+                *best_kp = stable_kp;
+                *best_kd = stable_kd;
+                *best_abs_werr = stable_abs_werr;
+                *best_abs_terr = stable_time_s;
+                ESP_LOGI(TAG, "COARSE candidate accepted, confirmation 1/%d", AUTOTUNE_STABLE_CONFIRM_RUNS);
+                kp = stable_kp;
+                kd = stable_kd;
+                continue;
+            }
+            // Keep searching with ES
+            es_generate_candidate(&kp, &kd, kp_min, kp_max, kd_min, kd_max);
+            continue;
+        }
+
+        if (phase == COARSE_PHASE_CONFIRM) {
+            if (accepted) {
+                stable_confirmations++;
+                if (elapsed_s < stable_time_s) {
+                    stable_time_s = elapsed_s;
+                }
+                if (abs_werr < stable_abs_werr) {
+                    stable_abs_werr = abs_werr;
+                }
+
+                *best_kp = stable_kp;
+                *best_kd = stable_kd;
+                *best_abs_werr = stable_abs_werr;
+                *best_abs_terr = stable_time_s;
+
+                ESP_LOGI(TAG, "COARSE confirmation %d/%d OK",
+                         stable_confirmations, AUTOTUNE_STABLE_CONFIRM_RUNS);
+
+                if (stable_confirmations >= AUTOTUNE_STABLE_CONFIRM_RUNS) {
+                    confirmed_kp = stable_kp;
+                    confirmed_kd = stable_kd;
+                    confirmed_time_s = stable_time_s;
+                    confirmed_abs_werr = stable_abs_werr;
+                    confirmed_ready = true;
+
+                    phase = COARSE_PHASE_SPEED_PROBE;
+                    speed_probe_idx = 0;
+                    reconfirming_speed_candidate = false;
+                    fallback_kp = stable_kp;
+                    fallback_kd = stable_kd;
+                    fallback_time_s = stable_time_s;
+                    fallback_abs_werr = stable_abs_werr;
+                    float q = telemetry_recent_quality_mean(AUTOTUNE_STAGE_COARSE, 8);
+                    float adaptive_step = AUTOTUNE_SPEED_PROBE_GAIN_STEP * (0.70f + 0.60f * clampf(q, 0.0f, 1.0f));
+                    float speed_factor = 1.0f + adaptive_step * (float)(speed_probe_idx + 1);
+                    kp = clampf(stable_kp * speed_factor, kp_min, kp_max);
+                    kd = clampf(stable_kd * speed_factor, kd_min, kd_max);
+                    ESP_LOGI(TAG, "COARSE stable confirmed, starting speed probes");
+                } else {
+                    kp = stable_kp;
+                    kd = stable_kd;
+                }
+            } else {
+                if (reconfirming_speed_candidate) {
+                    // Step back to last stable setup instead of restarting full search.
+                    stable_kp = fallback_kp;
+                    stable_kd = fallback_kd;
+                    stable_time_s = fallback_time_s;
+                    stable_abs_werr = fallback_abs_werr;
+                    if (confirmed_ready) {
+                        *best_kp = confirmed_kp;
+                        *best_kd = confirmed_kd;
+                        *best_abs_werr = confirmed_abs_werr;
+                        *best_abs_terr = confirmed_time_s;
+                    } else {
+                        *best_kp = stable_kp;
+                        *best_kd = stable_kd;
+                        *best_abs_werr = stable_abs_werr;
+                        *best_abs_terr = stable_time_s;
+                    }
+                    tolerance_reached = true;
+                    ESP_LOGI(TAG, "COARSE speed candidate not confirmed, stepping back one level");
+                    break;
+                }
+                ESP_LOGI(TAG, "COARSE confirmation failed, back to search");
+                phase = COARSE_PHASE_SEARCH;
+                stable_confirmations = 0;
+                es_generate_candidate(&kp, &kd, kp_min, kp_max, kd_min, kd_max);
+            }
+            continue;
+        }
+
+        // COARSE_PHASE_SPEED_PROBE
+        bool faster_and_precise = accepted && (elapsed_s + AUTOTUNE_MIN_SPEED_GAIN_S < stable_time_s);
+        if (faster_and_precise) {
+            fallback_kp = stable_kp;
+            fallback_kd = stable_kd;
+            fallback_time_s = stable_time_s;
+            fallback_abs_werr = stable_abs_werr;
+            stable_kp = kp;
+            stable_kd = kd;
+            stable_time_s = elapsed_s;
+            stable_abs_werr = abs_werr;
+            stable_confirmations = 1;
+            reconfirming_speed_candidate = true;
+            phase = COARSE_PHASE_CONFIRM;
+            *best_kp = stable_kp;
+            *best_kd = stable_kd;
+            *best_abs_werr = stable_abs_werr;
+            *best_abs_terr = stable_time_s;
+            ESP_LOGI(TAG, "COARSE faster precise setup found, re-confirming");
+            kp = stable_kp;
+            kd = stable_kd;
+            continue;
+        }
+
+        speed_probe_idx++;
+        if (speed_probe_idx >= AUTOTUNE_SPEED_PROBE_ATTEMPTS) {
+            // Could not find a faster setup with same precision. Keep stable setup.
+            tolerance_reached = true;
+            if (confirmed_ready) {
+                *best_kp = confirmed_kp;
+                *best_kd = confirmed_kd;
+                *best_abs_werr = confirmed_abs_werr;
+                *best_abs_terr = confirmed_time_s;
+            } else {
+                *best_kp = stable_kp;
+                *best_kd = stable_kd;
+                *best_abs_werr = stable_abs_werr;
+                *best_abs_terr = stable_time_s;
+            }
+            ESP_LOGI(TAG, "COARSE final stable setup kept (no faster precise variant)");
+            break;
+        }
+
+        float q = telemetry_recent_quality_mean(AUTOTUNE_STAGE_COARSE, 8);
+        float adaptive_step = AUTOTUNE_SPEED_PROBE_GAIN_STEP * (0.70f + 0.60f * clampf(q, 0.0f, 1.0f));
+        float speed_factor = 1.0f + adaptive_step * (float)(speed_probe_idx + 1);
+        kp = clampf(stable_kp * speed_factor, kp_min, kp_max);
+        kd = clampf(stable_kd * speed_factor, kd_min, kd_max);
     }
 
     return tolerance_reached;
@@ -760,12 +1105,47 @@ static bool tune_fine_stage(profile_t *profile,
 
     float kp = kp_base;
     float kd = kd_base;
+    float stable_kp = kp_base;
+    float stable_kd = kd_base;
+    float stable_total_time_s = 1e9f;
+    float stable_abs_werr = 1e9f;
+    float confirmed_kp = kp_base;
+    float confirmed_kd = kd_base;
+    float confirmed_total_time_s = 1e9f;
+    float confirmed_abs_werr = 1e9f;
+    bool confirmed_ready = false;
+    float fallback_kp = kp_base;
+    float fallback_kd = kd_base;
+    float fallback_total_time_s = 1e9f;
+    float fallback_abs_werr = 1e9f;
+    int stable_confirmations = 0;
+    int speed_probe_idx = 0;
+    bool reconfirming_speed_candidate = false;
+
+    typedef enum {
+        FINE_PHASE_SEARCH = 0,
+        FINE_PHASE_CONFIRM = 1,
+        FINE_PHASE_SPEED_PROBE = 2,
+    } fine_phase_t;
+    fine_phase_t phase = FINE_PHASE_SEARCH;
 
     for (int run = 1; run <= s_request.max_runs_per_stage; run++) {
+        if (autotune_take_finish_now_request()) {
+            ESP_LOGI(TAG, "Finish-now requested during FINE: ending autotune");
+            autotune_lock();
+            strncpy(s_status.message, "Finish-now: finalizing",
+                    sizeof(s_status.message) - 1);
+            s_status.message[sizeof(s_status.message) - 1] = '\0';
+            autotune_unlock();
+            tolerance_reached = true;
+            break;
+        }
+
         if (!wait_cup_removal_return_cycle()) {
             return false;
         }
 
+        autotune_lock();
         s_status.stage = AUTOTUNE_STAGE_FINE;
         s_status.stage_run = run;
         s_status.stage_max_runs = s_request.max_runs_per_stage;
@@ -773,6 +1153,7 @@ static bool tune_fine_stage(profile_t *profile,
         s_status.active_kd = kd;
         s_status.substatus = AUTOTUNE_SUB_DISPENSING;
         snprintf(s_status.message, sizeof(s_status.message), "FINE run %d/%d", run, s_request.max_runs_per_stage);
+        autotune_unlock();
 
         float final_w = 0.0f;
         float fine_elapsed = 0.0f;
@@ -788,8 +1169,10 @@ static bool tune_fine_stage(profile_t *profile,
         }
 
         float total_elapsed = actual_coarse_elapsed + fine_elapsed;
+        autotune_lock();
         s_status.last_weight = final_w;
         s_status.last_elapsed_s = total_elapsed;
+        autotune_unlock();
 
         float werr = final_w - s_request.fine_target_weight;
         float abs_werr = fabsf(werr);
@@ -806,27 +1189,183 @@ static bool tune_fine_stage(profile_t *profile,
             *best_kd = kd;
             *best_abs_werr = abs_werr;
             *best_abs_terr = fabsf(terr);
+            autotune_lock();
             s_status.fine_best_kp = kp;
             s_status.fine_best_kd = kd;
             s_status.fine_best_weight_error = abs_werr;
             s_status.fine_best_time_error = terr;
+            autotune_unlock();
         }
 
+        autotune_lock();
         s_status.runs_done++;
         s_status.progress_pct = ((float)s_status.runs_done / (float)s_status.runs_total) * 100.0f;
+        autotune_unlock();
 
         ESP_LOGI(TAG, "FINE run %d/%d: kp=%.5f kd=%.5f w=%.4f t_fine=%.2f t_total=%.2f werr=%.4f terr=%.3f os=%.4f",
                  run, s_request.max_runs_per_stage, kp, kd, final_w, fine_elapsed, total_elapsed, abs_werr, terr, overshoot);
 
-        // Tolerance: weight accuracy only — time is optimized by ES cost, not a hard gate.
-        // This prevents autotune from failing when physics makes time target unreachable.
-        if (abs_werr <= s_request.fine_weight_tolerance) {
-            ESP_LOGI(TAG, "FINE tuned to tolerance on run %d (total=%.2fs)", run, total_elapsed);
+        if (autotune_take_finish_now_request()) {
+            ESP_LOGI(TAG, "Finish-now requested in FINE: keeping current result and ending autotune");
+            autotune_lock();
+            strncpy(s_status.message, "Finish-now: finalizing",
+                    sizeof(s_status.message) - 1);
+            s_status.message[sizeof(s_status.message) - 1] = '\0';
+            autotune_unlock();
             tolerance_reached = true;
             break;
         }
 
-        es_generate_candidate(&kp, &kd, kp_min, kp_max, kd_min, kd_max);
+        float positive_overshoot = fmaxf(0.0f, overshoot);
+        float run_quality = get_stage_quality(AUTOTUNE_STAGE_FINE);
+        float quality_floor = fmaxf(AUTOTUNE_MIN_ACCEPT_QUALITY, telemetry_recent_quality_mean(AUTOTUNE_STAGE_FINE, 8) * 0.70f);
+        bool accepted = (abs_werr <= s_request.fine_weight_tolerance) &&
+                        (positive_overshoot <= s_request.fine_weight_tolerance) &&
+                        (run_quality >= quality_floor);
+        telemetry_add(AUTOTUNE_STAGE_FINE, (uint8_t)phase, kp, kd, final_w, total_elapsed,
+                      overshoot, abs_werr, run_quality, accepted);
+
+        if (phase == FINE_PHASE_SEARCH) {
+            if (accepted) {
+                stable_kp = kp;
+                stable_kd = kd;
+                stable_total_time_s = total_elapsed;
+                stable_abs_werr = abs_werr;
+                stable_confirmations = 1;
+                speed_probe_idx = 0;
+                phase = FINE_PHASE_CONFIRM;
+                *best_kp = stable_kp;
+                *best_kd = stable_kd;
+                *best_abs_werr = stable_abs_werr;
+                *best_abs_terr = fabsf(terr);
+                ESP_LOGI(TAG, "FINE candidate accepted, confirmation 1/%d", AUTOTUNE_STABLE_CONFIRM_RUNS);
+                kp = stable_kp;
+                kd = stable_kd;
+                continue;
+            }
+            es_generate_candidate(&kp, &kd, kp_min, kp_max, kd_min, kd_max);
+            continue;
+        }
+
+        if (phase == FINE_PHASE_CONFIRM) {
+            if (accepted) {
+                stable_confirmations++;
+                if (total_elapsed < stable_total_time_s) {
+                    stable_total_time_s = total_elapsed;
+                }
+                if (abs_werr < stable_abs_werr) {
+                    stable_abs_werr = abs_werr;
+                }
+
+                *best_kp = stable_kp;
+                *best_kd = stable_kd;
+                *best_abs_werr = stable_abs_werr;
+                *best_abs_terr = fabsf(stable_total_time_s - s_request.total_target_time_s);
+
+                ESP_LOGI(TAG, "FINE confirmation %d/%d OK",
+                         stable_confirmations, AUTOTUNE_STABLE_CONFIRM_RUNS);
+
+                if (stable_confirmations >= AUTOTUNE_STABLE_CONFIRM_RUNS) {
+                    confirmed_kp = stable_kp;
+                    confirmed_kd = stable_kd;
+                    confirmed_total_time_s = stable_total_time_s;
+                    confirmed_abs_werr = stable_abs_werr;
+                    confirmed_ready = true;
+
+                    phase = FINE_PHASE_SPEED_PROBE;
+                    speed_probe_idx = 0;
+                    reconfirming_speed_candidate = false;
+                    fallback_kp = stable_kp;
+                    fallback_kd = stable_kd;
+                    fallback_total_time_s = stable_total_time_s;
+                    fallback_abs_werr = stable_abs_werr;
+                    float q = telemetry_recent_quality_mean(AUTOTUNE_STAGE_FINE, 8);
+                    float adaptive_step = AUTOTUNE_SPEED_PROBE_GAIN_STEP * (0.70f + 0.60f * clampf(q, 0.0f, 1.0f));
+                    float speed_factor = 1.0f + adaptive_step * (float)(speed_probe_idx + 1);
+                    kp = clampf(stable_kp * speed_factor, kp_min, kp_max);
+                    kd = clampf(stable_kd * speed_factor, kd_min, kd_max);
+                    ESP_LOGI(TAG, "FINE stable confirmed, starting speed probes");
+                } else {
+                    kp = stable_kp;
+                    kd = stable_kd;
+                }
+            } else {
+                if (reconfirming_speed_candidate) {
+                    // Step back one level to previously confirmed setup.
+                    stable_kp = fallback_kp;
+                    stable_kd = fallback_kd;
+                    stable_total_time_s = fallback_total_time_s;
+                    stable_abs_werr = fallback_abs_werr;
+                    if (confirmed_ready) {
+                        *best_kp = confirmed_kp;
+                        *best_kd = confirmed_kd;
+                        *best_abs_werr = confirmed_abs_werr;
+                        *best_abs_terr = fabsf(confirmed_total_time_s - s_request.total_target_time_s);
+                    } else {
+                        *best_kp = stable_kp;
+                        *best_kd = stable_kd;
+                        *best_abs_werr = stable_abs_werr;
+                        *best_abs_terr = fabsf(stable_total_time_s - s_request.total_target_time_s);
+                    }
+                    tolerance_reached = true;
+                    ESP_LOGI(TAG, "FINE speed candidate not confirmed, stepping back one level");
+                    break;
+                }
+                ESP_LOGI(TAG, "FINE confirmation failed, back to search");
+                phase = FINE_PHASE_SEARCH;
+                stable_confirmations = 0;
+                es_generate_candidate(&kp, &kd, kp_min, kp_max, kd_min, kd_max);
+            }
+            continue;
+        }
+
+        // FINE_PHASE_SPEED_PROBE
+        bool faster_and_precise = accepted && (total_elapsed + AUTOTUNE_MIN_SPEED_GAIN_S < stable_total_time_s);
+        if (faster_and_precise) {
+            fallback_kp = stable_kp;
+            fallback_kd = stable_kd;
+            fallback_total_time_s = stable_total_time_s;
+            fallback_abs_werr = stable_abs_werr;
+            stable_kp = kp;
+            stable_kd = kd;
+            stable_total_time_s = total_elapsed;
+            stable_abs_werr = abs_werr;
+            stable_confirmations = 1;
+            reconfirming_speed_candidate = true;
+            phase = FINE_PHASE_CONFIRM;
+            *best_kp = stable_kp;
+            *best_kd = stable_kd;
+            *best_abs_werr = stable_abs_werr;
+            *best_abs_terr = fabsf(total_elapsed - s_request.total_target_time_s);
+            ESP_LOGI(TAG, "FINE faster precise setup found, re-confirming");
+            kp = stable_kp;
+            kd = stable_kd;
+            continue;
+        }
+
+        speed_probe_idx++;
+        if (speed_probe_idx >= AUTOTUNE_SPEED_PROBE_ATTEMPTS) {
+            tolerance_reached = true;
+            if (confirmed_ready) {
+                *best_kp = confirmed_kp;
+                *best_kd = confirmed_kd;
+                *best_abs_werr = confirmed_abs_werr;
+                *best_abs_terr = fabsf(confirmed_total_time_s - s_request.total_target_time_s);
+            } else {
+                *best_kp = stable_kp;
+                *best_kd = stable_kd;
+                *best_abs_werr = stable_abs_werr;
+                *best_abs_terr = fabsf(stable_total_time_s - s_request.total_target_time_s);
+            }
+            ESP_LOGI(TAG, "FINE final stable setup kept (no faster precise variant)");
+            break;
+        }
+
+        float q = telemetry_recent_quality_mean(AUTOTUNE_STAGE_FINE, 8);
+        float adaptive_step = AUTOTUNE_SPEED_PROBE_GAIN_STEP * (0.70f + 0.60f * clampf(q, 0.0f, 1.0f));
+        float speed_factor = 1.0f + adaptive_step * (float)(speed_probe_idx + 1);
+        kp = clampf(stable_kp * speed_factor, kp_min, kp_max);
+        kd = clampf(stable_kd * speed_factor, kd_min, kd_max);
     }
 
     return tolerance_reached;
@@ -845,9 +1384,12 @@ static void autotune_task(void *arg)
     }
 
     trials_reset();
+    telemetry_reset();
 
+    autotune_lock();
     s_status.runs_total = s_request.max_runs_per_stage * 2;
     s_status.runs_done = 0;
+    autotune_unlock();
 
     float best_coarse_kp = profile->coarse_kp;
     float best_coarse_kd = profile->coarse_kd;
@@ -894,12 +1436,14 @@ static void autotune_task(void *arg)
         }
     }
 
+    autotune_lock();
     s_status.stage = AUTOTUNE_STAGE_NONE;
     s_status.substatus = AUTOTUNE_SUB_IDLE;
     s_status.state = AUTOTUNE_STATE_DONE;
     s_status.progress_pct = 100.0f;
     strncpy(s_status.message, "Autotune coarse+fine completed", sizeof(s_status.message) - 1);
     s_status.message[sizeof(s_status.message) - 1] = '\0';
+    autotune_unlock();
 
     stop_all();
     s_task_handle = NULL;
@@ -908,14 +1452,24 @@ static void autotune_task(void *arg)
 
 esp_err_t autotune_init(void)
 {
+    if (!s_autotune_mutex) {
+        s_autotune_mutex = xSemaphoreCreateMutex();
+        if (!s_autotune_mutex) {
+            return ESP_ERR_NO_MEM;
+        }
+    }
+
     memset(&s_request, 0, sizeof(s_request));
     memset(&s_status, 0, sizeof(s_status));
 
+    autotune_lock();
     s_status.state = AUTOTUNE_STATE_IDLE;
     s_status.stage = AUTOTUNE_STAGE_NONE;
     s_status.substatus = AUTOTUNE_SUB_IDLE;
     s_status.progress_pct = 0.0f;
     strncpy(s_status.message, "Idle", sizeof(s_status.message) - 1);
+    s_status.message[sizeof(s_status.message) - 1] = '\0';
+    autotune_unlock();
 
     return ESP_OK;
 }
@@ -925,7 +1479,7 @@ esp_err_t autotune_start(const autotune_request_t *request)
     if (!request) {
         return ESP_ERR_INVALID_ARG;
     }
-    if (s_status.state == AUTOTUNE_STATE_RUNNING) {
+    if (autotune_is_running()) {
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -939,13 +1493,23 @@ esp_err_t autotune_start(const autotune_request_t *request)
         return ESP_ERR_INVALID_ARG;
     }
 
+    // Fine stage must always target a higher weight than coarse prefill.
+    if (request->coarse_target_weight >=
+        (request->fine_target_weight - AUTOTUNE_STAGE_TARGET_MIN_GAP_GN)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    autotune_lock();
     s_request = *request;
+    s_finish_now_requested = false;
 
     memset(&s_status, 0, sizeof(s_status));
     s_status.state = AUTOTUNE_STATE_RUNNING;
     s_status.stage = AUTOTUNE_STAGE_COARSE;
     s_status.stage_max_runs = s_request.max_runs_per_stage;
     strncpy(s_status.message, "Autotune coarse+fine in progress", sizeof(s_status.message) - 1);
+    s_status.message[sizeof(s_status.message) - 1] = '\0';
+    autotune_unlock();
 
     BaseType_t ret = xTaskCreate(autotune_task,
                                  "autotune",
@@ -954,8 +1518,11 @@ esp_err_t autotune_start(const autotune_request_t *request)
                                  AUTOTUNE_TASK_PRIO,
                                  &s_task_handle);
     if (ret != pdPASS) {
+        autotune_lock();
         s_status.state = AUTOTUNE_STATE_ERROR;
         strncpy(s_status.message, "Failed to start autotune task", sizeof(s_status.message) - 1);
+        s_status.message[sizeof(s_status.message) - 1] = '\0';
+        autotune_unlock();
         return ESP_FAIL;
     }
 
@@ -967,28 +1534,57 @@ esp_err_t autotune_get_status(autotune_status_t *status)
     if (!status) {
         return ESP_ERR_INVALID_ARG;
     }
+    autotune_lock();
     *status = s_status;
+    autotune_unlock();
     return ESP_OK;
 }
 
 esp_err_t autotune_cancel(void)
 {
-    if (s_status.state != AUTOTUNE_STATE_RUNNING) {
+    if (!autotune_is_running()) {
         return ESP_ERR_INVALID_STATE;
     }
 
+    autotune_lock();
     s_status.state = AUTOTUNE_STATE_IDLE;
     s_status.stage = AUTOTUNE_STAGE_NONE;
     s_status.substatus = AUTOTUNE_SUB_IDLE;
     s_status.progress_pct = 0.0f;
     strncpy(s_status.message, "Autotune cancelled", sizeof(s_status.message) - 1);
+    s_status.message[sizeof(s_status.message) - 1] = '\0';
+    autotune_unlock();
 
     stop_all();
     return ESP_OK;
 }
 
+esp_err_t autotune_finish_now(void)
+{
+    if (!autotune_is_running()) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    autotune_lock();
+    s_finish_now_requested = true;
+    if (s_status.stage == AUTOTUNE_STAGE_COARSE) {
+        strncpy(s_status.message, "Finish-now requested: moving to fine stage",
+                sizeof(s_status.message) - 1);
+    } else if (s_status.stage == AUTOTUNE_STAGE_FINE) {
+        strncpy(s_status.message, "Finish-now requested: finalizing",
+                sizeof(s_status.message) - 1);
+    } else {
+        strncpy(s_status.message, "Finish-now requested",
+                sizeof(s_status.message) - 1);
+    }
+    s_status.message[sizeof(s_status.message) - 1] = '\0';
+    autotune_unlock();
+    return ESP_OK;
+}
+
 int autotune_get_trials(autotune_trial_result_t *out, int max_count)
 {
+    autotune_lock();
     int count = (s_trial_count < max_count) ? s_trial_count : max_count;
     for (int i = 0; i < count; i++) {
         out[i].stage = s_trials[i].stage;
@@ -1000,5 +1596,21 @@ int autotune_get_trials(autotune_trial_result_t *out, int max_count)
         out[i].settled_weight = s_trials[i].settled_weight;
         out[i].elapsed_s = s_trials[i].elapsed_s;
     }
+    autotune_unlock();
+    return count;
+}
+
+int autotune_get_telemetry(autotune_telemetry_entry_t *out, int max_count)
+{
+    if (!out || max_count <= 0) {
+        return 0;
+    }
+
+    autotune_lock();
+    int count = (s_telemetry_count < max_count) ? s_telemetry_count : max_count;
+    for (int i = 0; i < count; i++) {
+        out[i] = s_telemetry[i];
+    }
+    autotune_unlock();
     return count;
 }
