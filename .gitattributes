@@ -1,0 +1,16 @@
+* text=auto eol=lf
+
+*.c text
+*.h text
+*.cpp text
+*.hpp text
+*.py text
+*.js text
+*.html text
+*.md text
+*.txt text
+*.yml text
+*.yaml text
+*.cmake text
+CMakeLists.txt text
+

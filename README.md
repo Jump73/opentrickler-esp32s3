@@ -115,3 +115,14 @@ from every dispense. This happens passively — no user action required.
 - Analytical PD tuning (compute optimal Kp/Kd from flow model slope)
 
 See [docs/flow_model_plan.md](docs/flow_model_plan.md) for full technical design.
+
+## Text and Encoding Policy
+
+Project text policy:
+- Use English for source comments, log messages, UI labels, and documentation.
+- Use UTF-8 encoding and LF line endings.
+
+Repository checks:
+```bash
+python scripts/check_text_quality.py
+```

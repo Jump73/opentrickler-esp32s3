@@ -137,7 +137,7 @@ bool encoder_poll(enc_event_t *evt_out)
     enc_msg_t m;
     if (xQueueReceive(s_q, &m, 0) != pdTRUE) return false;
 
-    // klik = DOWN potem UP w rozsądnym czasie
+    // click = DOWN then UP within a reasonable time window
     static int64_t last_down_us = 0;
     static bool down_seen = false;
 

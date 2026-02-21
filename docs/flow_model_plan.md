@@ -653,7 +653,7 @@ that would tune: delay_ms, inflight_gain, brake_gain, switch_margin_gn, fine_kp,
 
 See `docs/autotune_comparison_rp2040_vs_esp32s3.md` for full RP2040 vs ESP32-S3 comparison.
 
-### Relay feedback autotune / Åström-Hägglund (rejected)
+### Relay feedback autotune / Astrom-Hagglund (rejected)
 
 Classic industrial PID autotuning method: force relay oscillations, measure ultimate
 gain (Ku) and period (Tu), compute PID parameters via Ziegler-Nichols or similar rules.
