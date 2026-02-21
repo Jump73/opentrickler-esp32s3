@@ -308,6 +308,11 @@ static void do_wait_for_complete(void)
 
     // PD state (ki is not used)
     float last_error = 0.0f;
+    // Coarse sub-target: PD runs toward (target - stop_threshold) so the motor
+    // decelerates naturally, matching autotune's run_single_motor_dispense behaviour.
+    // At the stop point the motor is nearly still → in-flight powder ≈ 0.
+    float coarse_target = target - charge_mode_config.coarse_stop_threshold;
+    float last_coarse_error = coarse_target;  // init: full remaining error
     TickType_t last_sample_tick = xTaskGetTickCount();
     bool coarse_running = true;
     bool fine_trickle = false;  // true once we enter slow trickle zone
@@ -380,9 +385,12 @@ static void do_wait_for_complete(void)
         }
 
         // ── Coarse motor stop condition ──
-        if (error < charge_mode_config.coarse_stop_threshold && coarse_running) {
-            ESP_LOGI(TAG, "Coarse stop at weight=%.4f, error=%.4f, switching to fine",
-                     current_weight, error);
+        // Use coarse_error (from sub-target) so the stop fires when the motor has
+        // naturally decelerated to near-zero, matching autotune's 0.03 gn threshold.
+        float coarse_error = coarse_target - current_weight;
+        if (coarse_error <= 0.03f && coarse_running) {
+            ESP_LOGI(TAG, "Coarse stop at weight=%.4f, coarse_err=%.4f (sub-tgt=%.4f), switching to fine",
+                     current_weight, coarse_error, coarse_target);
             coarse_running = false;
             motor_set_speed(MOTOR_COARSE, 0);
             motor_enable(MOTOR_COARSE, false);
@@ -416,10 +424,13 @@ static void do_wait_for_complete(void)
 
         float set_speed = 0.0f;
         if (coarse_running) {
-            set_speed = profile->coarse_kp * error
-                      + profile->coarse_kd * derivative;
+            // PD toward coarse sub-target so motor decelerates naturally (like autotune).
+            float coarse_deriv = (coarse_error - last_coarse_error) / elapsed_ms;
+            set_speed = profile->coarse_kp * coarse_error
+                      + profile->coarse_kd * coarse_deriv;
             set_speed = fmaxf(coarse_min_speed, fminf(set_speed, coarse_max_speed));
             motor_set_speed(MOTOR_COARSE, set_speed);
+            last_coarse_error = coarse_error;
         } else {
             // Enter trickle mode when within FINE_TRICKLE_THRESHOLD_GN of target.
             // Motor crawls at minimum flow speed; scale is read after each 200ms
@@ -450,55 +461,85 @@ static void do_wait_for_complete(void)
         last_error = error;
     }
 
-    // Wait for weight to fully stabilize after motor stop.
-    // Powder in the tube continues falling for 500-800ms after stop.
-    // Minimum 400ms, requires SD < 0.015gn for an extra confirm window, max 2500ms.
+    // Charge was externally cancelled (REST s2=0). Do not classify or save
+    // partial/invalid result from the interrupted cycle.
+    if (exit_requested()) {
+        flow_model_record_stop();
+        ESP_LOGI(TAG, "Charge interrupted: skip settle/post-settle result classification");
+        return;
+    }
+
+    // Stability-detection settle — mirrors autotune's wait_for_settled_weight().
+    // Phase 1 (min 2000ms): discard rising-phase readings while in-flight powder settles.
+    // Phase 2: require SD < 0.015 gn on 10 consecutive readings before declaring stable.
+    // Hard timeout at 4000ms total; last reading used as fallback.
+    // LED classification and settled_weight are set AFTER this block fires so they
+    // reflect the truly stable weight, not just the moment the motor stopped.
     flow_model_record_stop();
     {
-        ring_buf_t settle_buf;
-        ring_buf_init(&settle_buf, 10);
-        TickType_t settle_start = xTaskGetTickCount();
-        TickType_t stable_since = 0;
-        bool stable_window_started = false;
-        while (1) {
-            float settle_w;
-            if (scale_block_wait_for_measurement(200, &settle_w)) {
-                flow_model_record_sample(0.0f, settle_w);
-                ring_buf_push(&settle_buf, settle_w);
-                runtime_lock();
-                runtime_state.current_weight = settle_w;
-                runtime_unlock();
-            }
-            TickType_t now_tick = xTaskGetTickCount();
-            uint32_t elapsed_ms = (uint32_t)((now_tick - settle_start) * portTICK_PERIOD_MS);
-            bool stable_now = (settle_buf.count >= 10 && ring_buf_sd(&settle_buf) < 0.015f);
+        const uint32_t min_wait_ms     = 2000;
+        const uint32_t hard_timeout_ms = 4000;
+        const float    stable_sd_limit = 0.015f;
+        const int      stable_readings = 10;
 
-            if (elapsed_ms >= 400 && stable_now) {
-                if (!stable_window_started) {
-                    stable_window_started = true;
-                    stable_since = now_tick;
-                } else {
-                    uint32_t stable_ms = (uint32_t)((now_tick - stable_since) * portTICK_PERIOD_MS);
-                    if (stable_ms >= 250) {
-                        runtime_lock();
-                        float stable_weight = runtime_state.current_weight;
-                        runtime_unlock();
-                        float stable_sd = ring_buf_sd(&settle_buf);
-                        ESP_LOGI(TAG, "Weight stable: %.4f gn (sd=%.4f) after %" PRIu32 "ms",
-                                 stable_weight, stable_sd, elapsed_ms);
+        ring_buf_t settle_buf;
+        ring_buf_init(&settle_buf, stable_readings);
+
+        TickType_t settle_start = xTaskGetTickCount();
+        bool phase2 = false;
+
+        while (1) {
+            if (exit_requested()) {
+                ESP_LOGI(TAG, "Charge interrupted during settle: skip result classification");
+                return;
+            }
+
+            float settle_w;
+            if (!scale_block_wait_for_measurement(200, &settle_w)) {
+                // Scale timeout — check hard deadline then retry
+                uint32_t elapsed_ms = (uint32_t)((xTaskGetTickCount() - settle_start) * portTICK_PERIOD_MS);
+                if (elapsed_ms >= hard_timeout_ms) {
+                    runtime_lock();
+                    float last_w = runtime_state.current_weight;
+                    runtime_unlock();
+                    ESP_LOGW(TAG, "Settle timeout (%" PRIu32 "ms, no reading): using %.4f gn",
+                             elapsed_ms, last_w);
+                    break;
+                }
+                continue;
+            }
+
+            flow_model_record_sample(0.0f, settle_w);
+            runtime_lock();
+            runtime_state.current_weight = settle_w;
+            runtime_unlock();
+
+            uint32_t elapsed_ms = (uint32_t)((xTaskGetTickCount() - settle_start) * portTICK_PERIOD_MS);
+
+            // Phase 1 → 2 transition: reset buffer to discard rising-phase readings
+            if (!phase2 && elapsed_ms >= min_wait_ms) {
+                ring_buf_init(&settle_buf, stable_readings);
+                phase2 = true;
+            }
+
+            if (phase2) {
+                ring_buf_push(&settle_buf, settle_w);
+
+                if (settle_buf.count >= stable_readings) {
+                    float sd = ring_buf_sd(&settle_buf);
+                    if (sd < stable_sd_limit) {
+                        // Scale is the authority — use the last raw reading as-is.
+                        // current_weight is already set to settle_w above.
+                        ESP_LOGI(TAG, "Weight stabilized: %.4f gn (sd=%.4f) after %" PRIu32 "ms",
+                                 settle_w, sd, elapsed_ms);
                         break;
                     }
                 }
-            } else {
-                stable_window_started = false;
             }
 
-            if (elapsed_ms >= 2500) {
-                runtime_lock();
-                float timeout_weight = runtime_state.current_weight;
-                runtime_unlock();
-                float timeout_sd = (settle_buf.count > 1) ? ring_buf_sd(&settle_buf) : 0.0f;
-                ESP_LOGI(TAG, "Settle timeout at %.4f gn (sd=%.4f)", timeout_weight, timeout_sd);
+            if (elapsed_ms >= hard_timeout_ms) {
+                ESP_LOGW(TAG, "Settle timeout (%" PRIu32 "ms): using last reading %.4f gn",
+                         elapsed_ms, settle_w);
                 break;
             }
         }
@@ -584,12 +625,34 @@ static void do_wait_for_cup_removal(void)
     // Classification was already finalized by the settling loop above.
     ring_buf_t data_buffer;
     ring_buf_init(&data_buffer, 5);
+    float pre_remove_latched_weight = NAN;
+    float prev_measurement = NAN;
+    bool pre_remove_frozen = false;
+    const float touch_jump_threshold_gn = 0.05f;
 
     while (!exit_requested()) {
         float measurement;
         if (!scale_block_wait_for_measurement(200, &measurement)) {
             continue;
         }
+
+        // Keep a pre-removal latched value from live scale. If we detect a sudden
+        // touch-induced jump (up or down), freeze latching to the last trusted value.
+        if (!pre_remove_frozen) {
+            if (!isnanf(prev_measurement)) {
+                float jump = fabsf(measurement - prev_measurement);
+                if (jump >= touch_jump_threshold_gn) {
+                    pre_remove_frozen = true;
+                    ESP_LOGI(TAG, "Cup-touch disturbance detected (jump=%.4f), freezing final latch at %.4f",
+                             jump, pre_remove_latched_weight);
+                }
+            }
+            if (!pre_remove_frozen) {
+                pre_remove_latched_weight = measurement;
+            }
+        }
+        prev_measurement = measurement;
+
         runtime_lock();
         runtime_state.current_weight = measurement;
         runtime_unlock();
@@ -602,6 +665,10 @@ static void do_wait_for_cup_removal(void)
 
             if (sd < charge_mode_config.set_point_sd_margin &&
                 mean + 10.0f < charge_mode_config.set_point_mean_margin) {
+                // settled_weight was already finalized by the 2500ms settle window
+                // in do_wait_for_complete — do NOT override it here.
+                // Any air-movement noise (0.02-0.03 gn) before cup removal would
+                // corrupt the result if we re-latched now.
                 ESP_LOGI(TAG, "Cup removed (mean=%.4f, sd=%.4f)", mean, sd);
                 break;
             }

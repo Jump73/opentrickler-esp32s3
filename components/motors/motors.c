@@ -422,6 +422,12 @@ esp_err_t motor_set_speed(motor_type_t motor, float speed_rps)
         last_tick = &fine_last_speed_tick;
     }
 
+    if (!isfinite(speed_rps)) {
+        ESP_LOGE(TAG, "%s motor: invalid speed input (NaN/Inf)",
+                 (motor == MOTOR_COARSE) ? "Coarse" : "Fine");
+        return ESP_ERR_INVALID_ARG;
+    }
+
     // Set direction pin based on speed sign
     bool direction = (speed_rps >= 0);
     if (inverted) {
@@ -465,10 +471,21 @@ esp_err_t motor_set_speed(motor_type_t motor, float speed_rps)
 
     float abs_speed_rps = *current_speed;
     if (abs_speed_rps < 0.001f) abs_speed_rps = 0.001f;
+    if (!isfinite(abs_speed_rps)) {
+        ESP_LOGE(TAG, "%s motor: invalid internal speed (NaN/Inf)",
+                 (motor == MOTOR_COARSE) ? "Coarse" : "Fine");
+        return ESP_ERR_INVALID_ARG;
+    }
 
     // Calculate STEP frequency: freq = speed_rps × full_steps × microsteps
     uint32_t steps_per_rev = config->full_steps_per_rotation * config->microsteps;
     float step_freq_hz = abs_speed_rps * (float)steps_per_rev;
+    if (!isfinite(step_freq_hz) || step_freq_hz <= 0.0f) {
+        ESP_LOGE(TAG, "%s motor: invalid step frequency %.3f Hz",
+                 (motor == MOTOR_COARSE) ? "Coarse" : "Fine",
+                 step_freq_hz);
+        return ESP_ERR_INVALID_ARG;
+    }
 
     // MCPWM timer resolution is 10 MHz
     const uint32_t MCPWM_RESOLUTION_HZ = 10000000;
@@ -476,18 +493,35 @@ esp_err_t motor_set_speed(motor_type_t motor, float speed_rps)
     // Calculate period ticks: period = resolution / frequency
     uint32_t period_ticks = (uint32_t)(MCPWM_RESOLUTION_HZ / step_freq_hz);
 
-    // Limit to valid range (minimum 10 ticks, maximum ~1M ticks)
+    // Limit to valid range (minimum 10 ticks, maximum 65535 ticks)
     if (period_ticks < 10) {
         period_ticks = 10;
-    } else if (period_ticks > 1000000) {
-        period_ticks = 1000000;
+    } else if (period_ticks > 65535) {
+        period_ticks = 65535;
     }
 
     // Update timer period (this changes the frequency)
-    mcpwm_timer_set_period(timer, period_ticks);
+    esp_err_t ret = mcpwm_timer_set_period(timer, period_ticks);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "%s motor: mcpwm_timer_set_period failed (ticks=%lu): %s",
+                 (motor == MOTOR_COARSE) ? "Coarse" : "Fine",
+                 (unsigned long)period_ticks,
+                 esp_err_to_name(ret));
+        mcpwm_timer_start_stop(timer, MCPWM_TIMER_STOP_EMPTY);
+        *running = false;
+        return ret;
+    }
 
     // Update comparator to maintain 50% duty cycle
-    mcpwm_comparator_set_compare_value(cmpr, period_ticks / 2);
+    ret = mcpwm_comparator_set_compare_value(cmpr, period_ticks / 2);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "%s motor: mcpwm_comparator_set_compare_value failed: %s",
+                 (motor == MOTOR_COARSE) ? "Coarse" : "Fine",
+                 esp_err_to_name(ret));
+        mcpwm_timer_start_stop(timer, MCPWM_TIMER_STOP_EMPTY);
+        *running = false;
+        return ret;
+    }
 
     // Start timer only if not already running (avoid glitches from repeated starts)
     if (!*running) {

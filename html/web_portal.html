@@ -104,7 +104,7 @@
 
             <div class="grid grid-cols-1 gap-2 px-4">
                 <div class="divider text-xs">Charge History</div>
-                <div class="overflow-x-auto max-h-64 overflow-y-auto">
+                <div class="overflow-x-auto">
                     <table class="table table-xs table-zebra w-full">
                         <thead class="sticky top-0 bg-base-200">
                             <tr>
@@ -119,6 +119,7 @@
                         <tbody id="chargeHistoryBody"></tbody>
                     </table>
                 </div>
+                <div id="chargeStats" class="text-xs font-mono text-center opacity-70" style="display:none;"></div>
                 <button class="btn btn-sm btn-outline w-full" onclick="exportChargeHistory()">Export CSV</button>
             </div>
 
@@ -220,7 +221,7 @@
 
                     <!-- Trial History Table -->
                     <div class="divider text-xs my-0">Trial History</div>
-                    <div class="overflow-x-auto max-h-48 overflow-y-auto">
+                    <div class="overflow-x-auto">
                         <table class="table table-xs table-zebra w-full">
                             <thead class="sticky top-0 bg-base-200">
                                 <tr>
@@ -1105,6 +1106,7 @@
     var _lastSettledWeight = null;
     var _lastSettledTarget = null;
     var _lastSettledTime = null;
+    var _lastSettledEvent = null;
     var chargeHistory = [];
 
     // Load fine_stop_threshold from charge mode config (used for over/under display)
@@ -1360,24 +1362,29 @@
                 resultText.textContent = "";
             }
 
-            // Track settled result from firmware (latched post-settle value).
-            if (charge_mode_state == ChargeModeState.REMOVE_CUP &&
+            // Track settled result from firmware.
+            // Update on REMOVE_CUP and also on RETURN_CUP poll, so transition
+            // uses the freshest latched value from backend.
+            if ((charge_mode_state == ChargeModeState.REMOVE_CUP ||
+                 charge_mode_state == ChargeModeState.RETURN_CUP) &&
                 charge_weight_set_point > 0 &&
                 typeof settled_weight === 'number' && !isNaN(settled_weight) &&
                 settled_weight > 0.0) {
                 _lastSettledWeight = settled_weight;
                 _lastSettledTarget = charge_weight_set_point;
                 _lastSettledTime = settled_time_seconds;
+                _lastSettledEvent = charge_mode_event;
             }
 
             // Record result at transition REMOVE_CUP -> RETURN_CUP
             if (_lastChargeState == ChargeModeState.REMOVE_CUP &&
                 charge_mode_state == ChargeModeState.RETURN_CUP &&
                 _lastSettledWeight !== null) {
-                _addChargeResult(_lastSettledTarget, _lastSettledWeight, _lastSettledTime);
+                _addChargeResult(_lastSettledTarget, _lastSettledWeight, _lastSettledTime, _lastSettledEvent);
                 _lastSettledWeight = null;
                 _lastSettledTarget = null;
                 _lastSettledTime = null;
+                _lastSettledEvent = null;
             }
             _lastChargeState = charge_mode_state;
         })
@@ -1396,11 +1403,13 @@
         })
     }
 
-    function _addChargeResult(target, weight, timeStr) {
+    function _addChargeResult(target, weight, timeStr, chargeEvent) {
         var threshold = window._fineStopThreshold || 0.03;
         var error = weight - target;
         var result = "OK";
-        if (error > threshold) result = "OVER";
+        if ((chargeEvent & ChargeModeEvent.OVER_CHARGE) !== 0) result = "OVER";
+        else if ((chargeEvent & ChargeModeEvent.UNDER_CHARGE) !== 0) result = "UNDER";
+        else if (error > threshold) result = "OVER";
         else if (error < -threshold) result = "UNDER";
 
         chargeHistory.push({
@@ -1433,6 +1442,22 @@
                 '</tr>';
         }
         tbody.innerHTML = html;
+
+        var statsEl = document.getElementById("chargeStats");
+        var n = chargeHistory.length;
+        if (n >= 2) {
+            var errors = chargeHistory.map(function(r) { return r.error; });
+            var mean = errors.reduce(function(a, b) { return a + b; }, 0) / n;
+            var variance = errors.reduce(function(a, b) { return a + (b - mean) * (b - mean); }, 0) / (n - 1);
+            var sd = Math.sqrt(variance);
+            var esMin = Math.min.apply(null, errors);
+            var esMax = Math.max.apply(null, errors);
+            var es = esMax - esMin;
+            statsEl.textContent = "n=" + n + "  SD: \u00b1" + sd.toFixed(4) + " gn  ES: " + es.toFixed(4) + " gn";
+            statsEl.style.display = "";
+        } else {
+            statsEl.style.display = "none";
+        }
     }
 
     function exportChargeHistory() {
@@ -1442,6 +1467,17 @@
             var r = chargeHistory[i];
             csv += r.n + "," + r.target.toFixed(3) + "," + r.weight.toFixed(3) + "," +
                    r.error.toFixed(3) + "," + r.time + "," + r.result + "\n";
+        }
+        var n = chargeHistory.length;
+        if (n >= 2) {
+            var errors = chargeHistory.map(function(r) { return r.error; });
+            var mean = errors.reduce(function(a, b) { return a + b; }, 0) / n;
+            var variance = errors.reduce(function(a, b) { return a + (b - mean) * (b - mean); }, 0) / (n - 1);
+            var sd = Math.sqrt(variance);
+            var esMin = Math.min.apply(null, errors);
+            var esMax = Math.max.apply(null, errors);
+            var es = esMax - esMin;
+            csv += "\nn=" + n + ",SD," + sd.toFixed(4) + ",ES," + es.toFixed(4) + "\n";
         }
         var blob = new Blob([csv], {type: "text/csv"});
         var url = URL.createObjectURL(blob);

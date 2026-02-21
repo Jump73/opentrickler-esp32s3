@@ -20,7 +20,8 @@ static const char *TAG = "Autotune";
 #define FINE_TRICKLE_THRESHOLD_GN 0.3f
 // Coarse target must stay below fine target by at least this margin.
 #define AUTOTUNE_STAGE_TARGET_MIN_GAP_GN 0.05f
-#define AUTOTUNE_STABLE_CONFIRM_RUNS 3
+#define AUTOTUNE_COARSE_STABLE_CONFIRM_RUNS 2
+#define AUTOTUNE_FINE_STABLE_CONFIRM_RUNS 3
 #define AUTOTUNE_SPEED_PROBE_ATTEMPTS 3
 #define AUTOTUNE_SPEED_PROBE_GAIN_STEP 0.12f
 #define AUTOTUNE_MIN_SPEED_GAIN_S 0.10f
@@ -153,6 +154,17 @@ static inline float clampf(float value, float min_v, float max_v)
     if (value < min_v) return min_v;
     if (value > max_v) return max_v;
     return value;
+}
+
+static inline void apply_fine_over_guard(float *kp_io,
+                                         float *kd_io,
+                                         float kp_min,
+                                         float kp_ceiling,
+                                         float kd_floor,
+                                         float kd_max)
+{
+    *kp_io = clampf(*kp_io, kp_min, kp_ceiling);
+    *kd_io = clampf(*kd_io, kd_floor, kd_max);
 }
 
 static void float_buf_reset(float_buf_t *buf)
@@ -851,6 +863,18 @@ static bool tune_coarse_stage(profile_t *profile,
             if (!wait_cup_removal_return_cycle()) {
                 return false;
             }
+            if (autotune_take_finish_now_request()) {
+                ESP_LOGI(TAG, "Finish-now requested in COARSE: using current coarse result and moving to FINE");
+                autotune_lock();
+                s_status.stage = AUTOTUNE_STAGE_FINE;
+                s_status.substatus = AUTOTUNE_SUB_REMOVE_CUP;
+                strncpy(s_status.message, "Finish-now: moving to fine stage",
+                        sizeof(s_status.message) - 1);
+                s_status.message[sizeof(s_status.message) - 1] = '\0';
+                autotune_unlock();
+                tolerance_reached = true;
+                break;
+            }
         }
 
         autotune_lock();
@@ -916,6 +940,8 @@ static bool tune_coarse_stage(profile_t *profile,
         if (autotune_take_finish_now_request()) {
             ESP_LOGI(TAG, "Finish-now requested in COARSE: using current coarse result and moving to FINE");
             autotune_lock();
+            s_status.stage = AUTOTUNE_STAGE_FINE;
+            s_status.substatus = AUTOTUNE_SUB_REMOVE_CUP;
             strncpy(s_status.message, "Finish-now: moving to fine stage",
                     sizeof(s_status.message) - 1);
             s_status.message[sizeof(s_status.message) - 1] = '\0';
@@ -947,7 +973,7 @@ static bool tune_coarse_stage(profile_t *profile,
                 *best_kd = stable_kd;
                 *best_abs_werr = stable_abs_werr;
                 *best_abs_terr = stable_time_s;
-                ESP_LOGI(TAG, "COARSE candidate accepted, confirmation 1/%d", AUTOTUNE_STABLE_CONFIRM_RUNS);
+                ESP_LOGI(TAG, "COARSE candidate accepted, confirmation 1/%d", AUTOTUNE_COARSE_STABLE_CONFIRM_RUNS);
                 kp = stable_kp;
                 kd = stable_kd;
                 continue;
@@ -973,9 +999,9 @@ static bool tune_coarse_stage(profile_t *profile,
                 *best_abs_terr = stable_time_s;
 
                 ESP_LOGI(TAG, "COARSE confirmation %d/%d OK",
-                         stable_confirmations, AUTOTUNE_STABLE_CONFIRM_RUNS);
+                         stable_confirmations, AUTOTUNE_COARSE_STABLE_CONFIRM_RUNS);
 
-                if (stable_confirmations >= AUTOTUNE_STABLE_CONFIRM_RUNS) {
+                if (stable_confirmations >= AUTOTUNE_COARSE_STABLE_CONFIRM_RUNS) {
                     confirmed_kp = stable_kp;
                     confirmed_kd = stable_kd;
                     confirmed_time_s = stable_time_s;
@@ -1121,6 +1147,8 @@ static bool tune_fine_stage(profile_t *profile,
     int stable_confirmations = 0;
     int speed_probe_idx = 0;
     bool reconfirming_speed_candidate = false;
+    float over_guard_kp_ceiling = kp_max;
+    float over_guard_kd_floor = kd_min;
 
     typedef enum {
         FINE_PHASE_SEARCH = 0,
@@ -1143,6 +1171,18 @@ static bool tune_fine_stage(profile_t *profile,
 
         if (!wait_cup_removal_return_cycle()) {
             return false;
+        }
+        if (autotune_take_finish_now_request()) {
+            ESP_LOGI(TAG, "Finish-now requested in FINE: keeping current result and ending autotune");
+            autotune_lock();
+            s_status.stage = AUTOTUNE_STAGE_FINE;
+            s_status.substatus = AUTOTUNE_SUB_REMOVE_CUP;
+            strncpy(s_status.message, "Finish-now: finalizing",
+                    sizeof(s_status.message) - 1);
+            s_status.message[sizeof(s_status.message) - 1] = '\0';
+            autotune_unlock();
+            tolerance_reached = true;
+            break;
         }
 
         autotune_lock();
@@ -1238,7 +1278,7 @@ static bool tune_fine_stage(profile_t *profile,
                 *best_kd = stable_kd;
                 *best_abs_werr = stable_abs_werr;
                 *best_abs_terr = fabsf(terr);
-                ESP_LOGI(TAG, "FINE candidate accepted, confirmation 1/%d", AUTOTUNE_STABLE_CONFIRM_RUNS);
+                ESP_LOGI(TAG, "FINE candidate accepted, confirmation 1/%d", AUTOTUNE_FINE_STABLE_CONFIRM_RUNS);
                 kp = stable_kp;
                 kd = stable_kd;
                 continue;
@@ -1263,9 +1303,9 @@ static bool tune_fine_stage(profile_t *profile,
                 *best_abs_terr = fabsf(stable_total_time_s - s_request.total_target_time_s);
 
                 ESP_LOGI(TAG, "FINE confirmation %d/%d OK",
-                         stable_confirmations, AUTOTUNE_STABLE_CONFIRM_RUNS);
+                         stable_confirmations, AUTOTUNE_FINE_STABLE_CONFIRM_RUNS);
 
-                if (stable_confirmations >= AUTOTUNE_STABLE_CONFIRM_RUNS) {
+                if (stable_confirmations >= AUTOTUNE_FINE_STABLE_CONFIRM_RUNS) {
                     confirmed_kp = stable_kp;
                     confirmed_kd = stable_kd;
                     confirmed_total_time_s = stable_total_time_s;
@@ -1283,7 +1323,8 @@ static bool tune_fine_stage(profile_t *profile,
                     float adaptive_step = AUTOTUNE_SPEED_PROBE_GAIN_STEP * (0.70f + 0.60f * clampf(q, 0.0f, 1.0f));
                     float speed_factor = 1.0f + adaptive_step * (float)(speed_probe_idx + 1);
                     kp = clampf(stable_kp * speed_factor, kp_min, kp_max);
-                    kd = clampf(stable_kd * speed_factor, kd_min, kd_max);
+                    kd = stable_kd;
+                    apply_fine_over_guard(&kp, &kd, kp_min, over_guard_kp_ceiling, over_guard_kd_floor, kd_max);
                     ESP_LOGI(TAG, "FINE stable confirmed, starting speed probes");
                 } else {
                     kp = stable_kp;
@@ -1320,6 +1361,16 @@ static bool tune_fine_stage(profile_t *profile,
         }
 
         // FINE_PHASE_SPEED_PROBE
+        bool over_limit = (abs_werr > 0.01f) || (positive_overshoot > 0.01f);
+        if (over_limit) {
+            over_guard_kp_ceiling = fminf(over_guard_kp_ceiling, fmaxf(kp_min, kp * 0.85f));
+            float kd_guard_cap = fminf(kd_max, kd_base * 2.5f);
+            over_guard_kd_floor = fmaxf(over_guard_kd_floor, fminf(kd_guard_cap, kd * 1.02f));
+            apply_fine_over_guard(&kp, &kd, kp_min, over_guard_kp_ceiling, over_guard_kd_floor, kd_max);
+            ESP_LOGI(TAG, "FINE over-guard active: kp<=%.5f kd>=%.5f",
+                     over_guard_kp_ceiling, over_guard_kd_floor);
+        }
+
         bool faster_and_precise = accepted && (total_elapsed + AUTOTUNE_MIN_SPEED_GAIN_S < stable_total_time_s);
         if (faster_and_precise) {
             fallback_kp = stable_kp;
@@ -1365,7 +1416,8 @@ static bool tune_fine_stage(profile_t *profile,
         float adaptive_step = AUTOTUNE_SPEED_PROBE_GAIN_STEP * (0.70f + 0.60f * clampf(q, 0.0f, 1.0f));
         float speed_factor = 1.0f + adaptive_step * (float)(speed_probe_idx + 1);
         kp = clampf(stable_kp * speed_factor, kp_min, kp_max);
-        kd = clampf(stable_kd * speed_factor, kd_min, kd_max);
+        kd = stable_kd;
+        apply_fine_over_guard(&kp, &kd, kp_min, over_guard_kp_ceiling, over_guard_kd_floor, kd_max);
     }
 
     return tolerance_reached;
@@ -1396,11 +1448,19 @@ static void autotune_task(void *arg)
     float best_coarse_werr = 999.0f;
     float best_coarse_terr = 999.0f;
 
-    if (!tune_coarse_stage(profile,
-                           &best_coarse_kp,
-                           &best_coarse_kd,
-                           &best_coarse_werr,
-                           &best_coarse_terr)) {
+    bool coarse_ok = tune_coarse_stage(profile,
+                                       &best_coarse_kp,
+                                       &best_coarse_kd,
+                                       &best_coarse_werr,
+                                       &best_coarse_terr);
+    if (!coarse_ok) {
+        bool coarse_fallback_ready = isfinite(best_coarse_werr) && (best_coarse_werr < 999.0f);
+        if (coarse_fallback_ready) {
+            ESP_LOGW(TAG, "COARSE run limit reached; using last stable coarse setup");
+            coarse_ok = true;
+        }
+    }
+    if (!coarse_ok) {
         autotune_finish_error("COARSE did not reach tolerance within run limit");
         s_task_handle = NULL;
         vTaskDelete(NULL);
@@ -1568,9 +1628,12 @@ esp_err_t autotune_finish_now(void)
     autotune_lock();
     s_finish_now_requested = true;
     if (s_status.stage == AUTOTUNE_STAGE_COARSE) {
+        s_status.stage = AUTOTUNE_STAGE_FINE;
+        s_status.substatus = AUTOTUNE_SUB_REMOVE_CUP;
         strncpy(s_status.message, "Finish-now requested: moving to fine stage",
                 sizeof(s_status.message) - 1);
     } else if (s_status.stage == AUTOTUNE_STAGE_FINE) {
+        s_status.substatus = AUTOTUNE_SUB_REMOVE_CUP;
         strncpy(s_status.message, "Finish-now requested: finalizing",
                 sizeof(s_status.message) - 1);
     } else {

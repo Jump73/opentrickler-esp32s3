@@ -675,10 +675,14 @@ char* rest_charge_mode_state_handler(int num_params, char *params[], char *value
     // Get updated state for response
     charge_mode_get_runtime_state(&runtime_state);
 
-    // Format current weight from the runtime snapshot so all returned
-    // fields (state/event/time/weight) come from the same time point.
+    // Format current weight: primary source is live physical scale reading.
+    // Runtime snapshot is fallback only (e.g., temporary invalid live frame).
     char weight_string[16];
-    if (!isnanf(runtime_state.current_weight)) {
+    float live_weight = scale_get_measurement();
+    bool live_valid = scale_is_measurement_valid();
+    if (live_valid && !isnanf(live_weight)) {
+        snprintf(weight_string, sizeof(weight_string), "%.3f", live_weight);
+    } else if (!isnanf(runtime_state.current_weight)) {
         snprintf(weight_string, sizeof(weight_string), "%.3f", runtime_state.current_weight);
     } else {
         snprintf(weight_string, sizeof(weight_string), "\"---\"");
