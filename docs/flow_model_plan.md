@@ -6,7 +6,7 @@ flow rate (gn/s) from every dispense. It builds a piecewise-linear lookup table 
 persisted in NVS per profile. This is the foundation for feedforward control (phase 2)
 and analytical PID tuning (phase 3).
 
-## Status: Phase 1+1b COMPLETE, Phase 2a-c REVERTED, Phase 2d-2f TODO
+## Status: Phase 1+1b COMPLETE, Phase 2a-c REVERTED, Phase 2d-2g TODO
 
 Phase 1 (recording + model building) is fully implemented and tested.
 - Flow model component created and integrated
@@ -27,6 +27,9 @@ Phase 1b (model quality improvements) — COMPLETE:
 - Per-bin confidence: `flow_model_is_trusted()` returns true when ≥3 bins have ≥5 dispenses
 - `last_quality` field persisted per motor in NVS
 - FLOW_MODEL_VERSION bumped to 2 (old NVS data auto-resets on first boot)
+- Huber-like residual clipping on EMA update — prevents single anomalous dispense from
+  shifting a bin: `g(r) = r if |r| <= HUBER_DELTA, else HUBER_DELTA * sign(r)`;
+  `flow_bin += alpha * g(r)` instead of direct EMA
 
 ## Architecture
 
@@ -444,18 +447,126 @@ if (median_cost < ACCEPTABLE_THRESHOLD) {
 
 **Requires**: nothing (can be implemented independently of Phase 2d/2e).
 
+**Flow model freeze during autotune** (new addition to Phase 2f):
+
+During autotune the live flow model must be **read-only**. Autotune data is atypical
+(aggressive excitation, different speed trajectories than normal dispenses) and if
+ingested into the live model, it biases the `speed→flow` map and corrupts delay/inertia
+estimates. Additionally, two adaptive loops reacting to each other (autotune adjusts
+gains ↔ model adjusts plant estimate) can cause oscillatory meta-dynamics and slow
+convergence.
+
+**Policy**:
+- `model_live`: read-only during autotune (used by any predictive logic, not updated)
+- `model_shadow`: separate buffer, updated from autotune samples with very low alpha or
+  full-batch fit; never used for control decisions
+- After autotune completes, if new gains were accepted **and** shadow quality metrics
+  pass (sufficient bin coverage, low residual variance): bounded merge
+  `model_live ← (1 − beta)*model_live + beta*model_shadow` with `beta ≤ 0.15`
+- Otherwise discard shadow — live model stays exactly as it was before autotune
+
+**New API** (to be added to `flow_model.h`):
+```c
+void flow_model_freeze(void);    // autotune start: block analyze_and_update()
+void flow_model_unfreeze(void);  // autotune end: restore normal updates
+bool flow_model_is_frozen(void);
+```
+
+`autotune.c` calls `flow_model_freeze()` before the ES loop and
+`flow_model_unfreeze()` (+ conditional shadow merge) after winner verification.
+
+**Post-autotune reduced alpha** (new addition to Phase 2f):
+
+After unfreezing, the first N normal dispenses (recommended N = 5) use
+`effective_alpha = 0.5 * alpha` to prevent the model from overreacting to the
+behavioural difference between the old and new gains. Implemented as a countdown
+counter `post_autotune_cooldown_n` in `flow_model.c` that is set by
+`flow_model_unfreeze()` and decremented per `analyze_and_update()` call.
+
+**Requires**: nothing (can be added alongside other Phase 2f changes).
+
+### Phase 2g: Diagnostics ring buffer + fine correction burst — TODO (optional)
+
+#### 2g.1 Per-dispense diagnostics ring buffer
+
+A compact record written to a static RAM ring buffer after every dispense.
+Enables objective pass/fail analysis and debugging without heavy on-device computation.
+
+**Record struct** (stored in a fixed-size ring buffer, e.g. 32 entries):
+```c
+typedef struct {
+    uint32_t timestamp_ms;
+    uint8_t  profile_idx;
+    uint16_t coarse_time_ms;
+    uint16_t fine_time_ms;
+    float    overshoot_gn;       // max(0, peak_weight - target)
+    float    e_final_gn;         // target - settled_weight
+    float    model_confidence;   // flow_model_is_trusted() → 0.0 or 1.0
+    float    delay_ms;           // transport delay at time of dispense
+    float    inflight_s;         // inertia factor at time of dispense
+    float    kp_fine;
+    float    kd_fine;
+    bool     autotune_flag;      // true if this trial was part of autotune
+} dispense_record_t;
+```
+
+**Implementation**:
+- Static ring buffer `dispense_record_t disp_log[DISP_LOG_SIZE]` in `charge_mode.c` or
+  shared module
+- Written from `do_wait_for_complete()` (normal) and `run_single_motor_dispense()` (autotune)
+- Exposed via REST endpoint `/rest/dispense_log` for WebUI display (future)
+- Does not require NVS — RAM only, lost on reboot, sufficient for session analysis
+
+**Requires**: nothing. Purely additive, zero impact on control.
+
+#### 2g.2 Fine correction burst after settle (opt-in)
+
+After the fine motor stops and weight settles, if the final error exceeds a deadband
+(undershoot), restart the fine motor for a short correction burst.
+
+**Algorithm**:
+```c
+// SETTLE_VERIFY: after fine motor stop, wait settle_window_ms
+vTaskDelay(pdMS_TO_TICKS(charge_mode_config.settle_verify_ms));  // e.g. 800ms
+float w_final;
+scale_block_wait_for_measurement(200, &w_final);
+float e_final = target - w_final;
+
+if (e_final > charge_mode_config.correction_deadband_gn) {  // e.g. 0.05 gn
+    // Small correction burst — fine motor only
+    motor_enable(MOTOR_FINE, true);
+    // Re-enter PD fine loop with updated weight; stop at fine_stop_threshold as normal
+}
+```
+
+**Risk**: a second burst can overshoot if fine inertia is underestimated. Therefore:
+- Opt-in only: enabled via `charge_mode_config.correction_burst_enable` (default false)
+- At most **one** correction burst per dispense (no recursive retry)
+- Only triggers if `e_final > correction_deadband_gn` (dead zone prevents dithering)
+- Gate on `flow_model_is_trusted()` if predictive cutoff (Phase 2e) is active, to avoid
+  compounding two unreliable predictions
+- `correction_deadband_gn` should be ≥ scale noise RMS (typically 0.04–0.06 gn)
+
+**Note**: this is the "settle-wait-retry" logic that caused Phase 2b to be rejected.
+It is included here as an opt-in because the risk is manageable with the deadband gate
+and single-retry limit, and because Phase 2e (predictive cutoff) reduces the likelihood
+of large undershots that would trigger it.
+
+**Requires**: Phase 2e recommended (reduces undershoot cases that trigger correction).
+
 ### Current state summary
-- **Active**: flow model self-learning with quality-weighted EMA + extended filters
-- **Complete**: Phase 1 + 1b — recording, model building, quality scoring, confidence tracking
+- **Active**: flow model self-learning with quality-weighted EMA + Huber clipping + extended filters
+- **Complete**: Phase 1 + 1b — recording, model building, quality scoring, confidence tracking, Huber EMA
 - **Reverted**: inertia-aware coarse stop (Phase 2a) — overwrites user-tuned thresholds
 - **Rejected**: inertia-aware fine stop (Phase 2b) — too complex for marginal gain
 - **TODO**: auto max_speed limit (Phase 2d) — first safe active adaptation
 - **TODO**: predictive fine cutoff (Phase 2e) — first real-time use of flow model in PD loop
-- **TODO**: improved autotune cost + early stop (Phase 2f) — better optimization quality
+- **TODO**: improved autotune cost + early stop + model freeze + post-autotune alpha (Phase 2f)
+- **TODO (optional)**: diagnostics ring buffer + fine correction burst (Phase 2g)
 - **Future**: feedforward speed (Phase 2c) — needs careful redesign (requires 2e stable)
 - PD control unchanged with fixed thresholds, precision is priority over speed
 - User preference: precision > speed. Overshoot = bad, undershoot = acceptable
-- Next steps: 2d → 2e → 2f → 2c → 3 → 4 (BO offloaded to WebUI)
+- Next steps: 2d → 2e → 2f → 2g (optional) → 2c → 3 → 4 (BO offloaded to WebUI)
 
 ## Phase 3: Analytical PD tuning (future)
 
