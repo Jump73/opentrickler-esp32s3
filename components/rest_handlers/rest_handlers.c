@@ -675,11 +675,11 @@ char* rest_charge_mode_state_handler(int num_params, char *params[], char *value
     // Get updated state for response
     charge_mode_get_runtime_state(&runtime_state);
 
-    // Format current weight directly from scale (charge_mode stub doesn't update it)
+    // Format current weight from the runtime snapshot so all returned
+    // fields (state/event/time/weight) come from the same time point.
     char weight_string[16];
-    float scale_weight = scale_get_measurement();
-    if (!isnanf(scale_weight)) {
-        snprintf(weight_string, sizeof(weight_string), "%.3f", scale_weight);
+    if (!isnanf(runtime_state.current_weight)) {
+        snprintf(weight_string, sizeof(weight_string), "%.3f", runtime_state.current_weight);
     } else {
         snprintf(weight_string, sizeof(weight_string), "\"---\"");
     }
