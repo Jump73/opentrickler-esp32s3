@@ -630,32 +630,44 @@ typedef struct {
 static trial_t s_trials[MAX_TRIALS];
 static int s_trial_count;
 
-// (1+1)-ES state
+// ---------------------------------------------------------------------------
+// Coordinate Descent optimizer for PD gains
+//
+// Tests Kp and Kd independently in log-space. Each 4-run cycle:
+//   KP_POS: test kp*exp(+δ), kd fixed
+//   KP_NEG: test kp*exp(-δ), kd fixed  → pick better, update best_kp, adapt δ_kp
+//   KD_POS: test best_kp, kd*exp(+δ)
+//   KD_NEG: test best_kp, kd*exp(-δ)  → pick better, update best_kd, adapt δ_kd
+//
+// Improvement is unambiguously attributed to the correct parameter.
+// CONFIRM phase (existing, unchanged) provides noise filtering (Option B).
+// ---------------------------------------------------------------------------
+typedef enum {
+    CD_STEP_BASELINE = -1,  // first run at profile defaults
+    CD_STEP_KP_POS   =  0,
+    CD_STEP_KP_NEG   =  1,
+    CD_STEP_KD_POS   =  2,
+    CD_STEP_KD_NEG   =  3,
+} cd_step_t;
+
 typedef struct {
-    float log_kp;       // current parent in log-space
-    float log_kd;
-    float sigma_kp;     // step size in log-space
-    float sigma_kd;
-    float best_log_kp;  // best ever
-    float best_log_kd;
-    float best_abs_werr;
-    float best_abs_terr;
-    float best_overshoot;
-    int successes;       // consecutive successes (for σ adaptation)
-    int failures;        // consecutive failures
-} es_state_t;
+    float best_kp, best_kd;
+    float best_abs_werr, best_abs_terr, best_overshoot;
+    float delta_kp, delta_kd;       // step size in log-space
+    // result of the "+" half-step, compared with "-" after both run
+    float pos_abs_werr, pos_abs_terr, pos_overshoot;
+    float pos_kp, pos_kd;
+    int kp_fail_streak;
+    int kd_fail_streak;
+    cd_step_t step;
+} cd_state_t;
 
-static es_state_t s_es;
-
-// Simple deterministic perturbation pattern (+1, -1, +1, -1, ...)
-// alternating between kp and kd dimensions for systematic exploration
-static int s_perturbation_idx;
+static cd_state_t s_cd;
 
 static void trials_reset(void)
 {
     autotune_lock();
     s_trial_count = 0;
-    s_perturbation_idx = 0;
     autotune_unlock();
 }
 
@@ -696,94 +708,162 @@ static bool es_is_better(float abs_werr1, float abs_terr1, float overshoot1,
     return abs_terr1 < abs_terr2;
 }
 
-static void es_init(float kp, float kd)
+static void cd_init(float kp, float kd)
 {
-    s_es.log_kp = logf(fmaxf(kp, 1e-6f));
-    s_es.log_kd = logf(fmaxf(kd, 1e-6f));
-    // Initial σ: ~30% change per step in multiplicative terms
-    // log(1.3) ≈ 0.26
-    s_es.sigma_kp = 0.26f;
-    s_es.sigma_kd = 0.26f;
-    s_es.best_log_kp = s_es.log_kp;
-    s_es.best_log_kd = s_es.log_kd;
-    s_es.best_abs_werr = 1e9f;
-    s_es.best_abs_terr = 1e9f;
-    s_es.best_overshoot = 0.0f;
-    s_es.successes = 0;
-    s_es.failures = 0;
+    s_cd.best_kp        = fmaxf(kp, 1e-6f);
+    s_cd.best_kd        = fmaxf(kd, 1e-6f);
+    s_cd.best_abs_werr  = 1e9f;
+    s_cd.best_abs_terr  = 1e9f;
+    s_cd.best_overshoot = 0.0f;
+    s_cd.delta_kp       = 0.26f;   // ~30% multiplicative step (log(1.3) ≈ 0.26)
+    s_cd.delta_kd       = 0.26f;
+    s_cd.kp_fail_streak = 0;
+    s_cd.kd_fail_streak = 0;
+    s_cd.step           = CD_STEP_BASELINE;
 }
 
-// Generate next candidate (kp, kd) from (1+1)-ES.
-// Uses alternating Rademacher-like perturbations: systematic +σ/-σ
-// on each dimension in turn. This gives better coverage than random.
-static void es_generate_candidate(float *kp, float *kd,
+// Produce the (kp, kd) to test in the next run.
+// For KP_POS and KD_POS: also saves pos_kp/pos_kd so cd_update can compare.
+static void cd_generate_candidate(float *kp, float *kd,
                                    float kp_min, float kp_max,
                                    float kd_min, float kd_max)
 {
-    // Perturbation pattern (4-cycle): +kp, -kp, +kd, -kd
-    float d_kp = 0.0f, d_kd = 0.0f;
-    int pat = s_perturbation_idx % 4;
-    switch (pat) {
-        case 0: d_kp = +s_es.sigma_kp; d_kd = +s_es.sigma_kd * 0.5f; break;
-        case 1: d_kp = -s_es.sigma_kp; d_kd = -s_es.sigma_kd * 0.5f; break;
-        case 2: d_kd = +s_es.sigma_kd; d_kp = +s_es.sigma_kp * 0.5f; break;
-        case 3: d_kd = -s_es.sigma_kd; d_kp = -s_es.sigma_kp * 0.5f; break;
+    switch (s_cd.step) {
+        case CD_STEP_BASELINE:
+            // First run uses profile defaults set by caller; just return current best.
+            *kp = s_cd.best_kp;
+            *kd = s_cd.best_kd;
+            break;
+        case CD_STEP_KP_POS:
+            *kp = clampf(s_cd.best_kp * expf(+s_cd.delta_kp), kp_min, kp_max);
+            *kd = s_cd.best_kd;
+            s_cd.pos_kp = *kp;
+            s_cd.pos_kd = *kd;
+            break;
+        case CD_STEP_KP_NEG:
+            *kp = clampf(s_cd.best_kp * expf(-s_cd.delta_kp), kp_min, kp_max);
+            *kd = s_cd.best_kd;
+            break;
+        case CD_STEP_KD_POS:
+            *kp = s_cd.best_kp;
+            *kd = clampf(s_cd.best_kd * expf(+s_cd.delta_kd), kd_min, kd_max);
+            s_cd.pos_kp = *kp;
+            s_cd.pos_kd = *kd;
+            break;
+        case CD_STEP_KD_NEG:
+            *kp = s_cd.best_kp;
+            *kd = clampf(s_cd.best_kd * expf(-s_cd.delta_kd), kd_min, kd_max);
+            break;
     }
-    s_perturbation_idx++;
-
-    float new_log_kp = s_es.log_kp + d_kp;
-    float new_log_kd = s_es.log_kd + d_kd;
-
-    *kp = clampf(expf(new_log_kp), kp_min, kp_max);
-    *kd = clampf(expf(new_log_kd), kd_min, kd_max);
 }
 
-// Update ES state after a trial. Returns true if this was a new best.
-static bool es_update(float kp, float kd,
+// Record result for current CD step. Advances state machine.
+// Returns true when global best (best_kp, best_kd) was updated.
+// Only call during SEARCH phase.
+static bool cd_update(float kp, float kd,
                        float abs_werr, float abs_terr, float overshoot)
 {
-    bool improved = es_is_better(abs_werr, abs_terr, overshoot,
-                                  s_es.best_abs_werr, s_es.best_abs_terr,
-                                  s_es.best_overshoot);
+    bool improved = false;
 
-    if (improved) {
-        // Success: move parent to this point
-        s_es.log_kp = logf(fmaxf(kp, 1e-6f));
-        s_es.log_kd = logf(fmaxf(kd, 1e-6f));
-        s_es.best_log_kp = s_es.log_kp;
-        s_es.best_log_kd = s_es.log_kd;
-        s_es.best_abs_werr = abs_werr;
-        s_es.best_abs_terr = abs_terr;
-        s_es.best_overshoot = overshoot;
-        s_es.successes++;
-        s_es.failures = 0;
+    switch (s_cd.step) {
+        case CD_STEP_BASELINE:
+            // Record profile-default run as starting point.
+            s_cd.best_kp        = kp;
+            s_cd.best_kd        = kd;
+            s_cd.best_abs_werr  = abs_werr;
+            s_cd.best_abs_terr  = abs_terr;
+            s_cd.best_overshoot = overshoot;
+            s_cd.step = CD_STEP_KP_POS;
+            ESP_LOGI(TAG, "CD: baseline kp=%.5f kd=%.5f werr=%.4f", kp, kd, abs_werr);
+            break;
 
-        // 1/5 success rule: increase σ on success
-        if (s_es.successes >= 2) {
-            s_es.sigma_kp *= 1.2f;
-            s_es.sigma_kd *= 1.2f;
-            s_es.successes = 0;
-            ESP_LOGI(TAG, "ES: σ increased → σ_kp=%.4f σ_kd=%.4f", s_es.sigma_kp, s_es.sigma_kd);
+        case CD_STEP_KP_POS:
+            // Save result; comparison happens after KP_NEG.
+            s_cd.pos_abs_werr  = abs_werr;
+            s_cd.pos_abs_terr  = abs_terr;
+            s_cd.pos_overshoot = overshoot;
+            s_cd.step = CD_STEP_KP_NEG;
+            break;
+
+        case CD_STEP_KP_NEG: {
+            // Pick the better of (+delta, -delta) for Kp.
+            bool pos_wins = es_is_better(s_cd.pos_abs_werr, s_cd.pos_abs_terr, s_cd.pos_overshoot,
+                                          abs_werr, abs_terr, overshoot);
+            float cand_werr, cand_terr, cand_os, cand_kp, cand_kd;
+            if (pos_wins) {
+                cand_werr = s_cd.pos_abs_werr; cand_terr = s_cd.pos_abs_terr;
+                cand_os   = s_cd.pos_overshoot;
+                cand_kp   = s_cd.pos_kp;       cand_kd   = s_cd.pos_kd;
+            } else {
+                cand_werr = abs_werr; cand_terr = abs_terr;
+                cand_os   = overshoot;
+                cand_kp   = kp;       cand_kd   = kd;
+            }
+            if (es_is_better(cand_werr, cand_terr, cand_os,
+                              s_cd.best_abs_werr, s_cd.best_abs_terr, s_cd.best_overshoot)) {
+                s_cd.best_kp        = cand_kp;
+                s_cd.best_kd        = cand_kd;
+                s_cd.best_abs_werr  = cand_werr;
+                s_cd.best_abs_terr  = cand_terr;
+                s_cd.best_overshoot = cand_os;
+                s_cd.delta_kp       = fminf(s_cd.delta_kp * 1.25f, 0.60f);
+                s_cd.kp_fail_streak = 0;
+                improved = true;
+                ESP_LOGI(TAG, "CD: Kp improved → best_kp=%.5f kd=%.5f werr=%.4f δ_kp=%.3f",
+                         s_cd.best_kp, s_cd.best_kd, s_cd.best_abs_werr, s_cd.delta_kp);
+            } else {
+                s_cd.delta_kp = fmaxf(s_cd.delta_kp * 0.75f, 0.05f);
+                s_cd.kp_fail_streak++;
+                ESP_LOGI(TAG, "CD: Kp no improvement δ_kp=%.3f streak=%d",
+                         s_cd.delta_kp, s_cd.kp_fail_streak);
+            }
+            s_cd.step = CD_STEP_KD_POS;
+            break;
         }
-    } else {
-        // Failure: keep parent, shrink σ
-        s_es.failures++;
-        s_es.successes = 0;
 
-        if (s_es.failures >= 2) {
-            s_es.sigma_kp *= 0.8f;
-            s_es.sigma_kd *= 0.8f;
-            // Minimum σ: ~5% change (log(1.05) ≈ 0.05)
-            s_es.sigma_kp = fmaxf(s_es.sigma_kp, 0.05f);
-            s_es.sigma_kd = fmaxf(s_es.sigma_kd, 0.05f);
-            s_es.failures = 0;
-            ESP_LOGI(TAG, "ES: σ decreased → σ_kp=%.4f σ_kd=%.4f", s_es.sigma_kp, s_es.sigma_kd);
+        case CD_STEP_KD_POS:
+            s_cd.pos_abs_werr  = abs_werr;
+            s_cd.pos_abs_terr  = abs_terr;
+            s_cd.pos_overshoot = overshoot;
+            s_cd.step = CD_STEP_KD_NEG;
+            break;
+
+        case CD_STEP_KD_NEG: {
+            // Pick the better of (+delta, -delta) for Kd.
+            bool pos_wins = es_is_better(s_cd.pos_abs_werr, s_cd.pos_abs_terr, s_cd.pos_overshoot,
+                                          abs_werr, abs_terr, overshoot);
+            float cand_werr, cand_terr, cand_os, cand_kp, cand_kd;
+            if (pos_wins) {
+                cand_werr = s_cd.pos_abs_werr; cand_terr = s_cd.pos_abs_terr;
+                cand_os   = s_cd.pos_overshoot;
+                cand_kp   = s_cd.pos_kp;       cand_kd   = s_cd.pos_kd;
+            } else {
+                cand_werr = abs_werr; cand_terr = abs_terr;
+                cand_os   = overshoot;
+                cand_kp   = kp;       cand_kd   = kd;
+            }
+            if (es_is_better(cand_werr, cand_terr, cand_os,
+                              s_cd.best_abs_werr, s_cd.best_abs_terr, s_cd.best_overshoot)) {
+                s_cd.best_kp        = cand_kp;
+                s_cd.best_kd        = cand_kd;
+                s_cd.best_abs_werr  = cand_werr;
+                s_cd.best_abs_terr  = cand_terr;
+                s_cd.best_overshoot = cand_os;
+                s_cd.delta_kd       = fminf(s_cd.delta_kd * 1.25f, 0.60f);
+                s_cd.kd_fail_streak = 0;
+                improved = true;
+                ESP_LOGI(TAG, "CD: Kd improved → kp=%.5f best_kd=%.5f werr=%.4f δ_kd=%.3f",
+                         s_cd.best_kp, s_cd.best_kd, s_cd.best_abs_werr, s_cd.delta_kd);
+            } else {
+                s_cd.delta_kd = fmaxf(s_cd.delta_kd * 0.75f, 0.05f);
+                s_cd.kd_fail_streak++;
+                ESP_LOGI(TAG, "CD: Kd no improvement δ_kd=%.3f streak=%d",
+                         s_cd.delta_kd, s_cd.kd_fail_streak);
+            }
+            s_cd.step = CD_STEP_KP_POS;  // 4-step cycle complete, restart from Kp
+            break;
         }
     }
-
-    ESP_LOGI(TAG, "ES: improved=%d parent=(%.5f,%.5f) best_werr=%.4f best_terr=%.3f",
-             improved, expf(s_es.log_kp), expf(s_es.log_kd),
-             s_es.best_abs_werr, s_es.best_abs_terr);
 
     return improved;
 }
@@ -810,10 +890,9 @@ static bool tune_coarse_stage(profile_t *profile,
 
     bool tolerance_reached = false;
 
-    s_perturbation_idx = 0;
-    es_init(kp_base, kd_base);
+    cd_init(kp_base, kd_base);
 
-    // First run uses base parameters (the parent)
+    // First run uses base parameters (the profile defaults)
     float kp = kp_base;
     float kd = kd_base;
     float stable_kp = kp_base;
@@ -915,19 +994,22 @@ static bool tune_coarse_stage(profile_t *profile,
         // Record trial (time_error = coarse elapsed relative to total target, informational)
         trials_add(1, kp, kd, werr, elapsed_s - s_request.total_target_time_s, overshoot, final_w, elapsed_s);
 
-        // Update ES and track best (time is one-sided tiebreaker only)
-        bool improved = es_update(kp, kd, abs_werr, es_terr, overshoot);
-        if (improved || run == 1) {
-            *best_kp = kp;
-            *best_kd = kd;
-            *best_abs_werr = abs_werr;
-            *best_abs_terr = elapsed_s;  // store coarse elapsed for reference
-            autotune_lock();
-            s_status.coarse_best_kp = kp;
-            s_status.coarse_best_kd = kd;
-            s_status.coarse_best_weight_error = abs_werr;
-            s_status.coarse_best_time_error = elapsed_s;
-            autotune_unlock();
+        // Update CD and track best (only during SEARCH; CONFIRM/SPEED_PROBE manage
+        // their own best tracking via stable_kp/confirmed_kp logic below).
+        if (phase == COARSE_PHASE_SEARCH) {
+            bool improved = cd_update(kp, kd, abs_werr, es_terr, overshoot);
+            if (improved || run == 1) {
+                *best_kp = s_cd.best_kp;
+                *best_kd = s_cd.best_kd;
+                *best_abs_werr = s_cd.best_abs_werr;
+                *best_abs_terr = elapsed_s;
+                autotune_lock();
+                s_status.coarse_best_kp = s_cd.best_kp;
+                s_status.coarse_best_kd = s_cd.best_kd;
+                s_status.coarse_best_weight_error = s_cd.best_abs_werr;
+                s_status.coarse_best_time_error = elapsed_s;
+                autotune_unlock();
+            }
         }
 
         autotune_lock();
@@ -979,8 +1061,8 @@ static bool tune_coarse_stage(profile_t *profile,
                 kd = stable_kd;
                 continue;
             }
-            // Keep searching with ES
-            es_generate_candidate(&kp, &kd, kp_min, kp_max, kd_min, kd_max);
+            // Keep searching with coordinate descent
+            cd_generate_candidate(&kp, &kd, kp_min, kp_max, kd_min, kd_max);
             continue;
         }
 
@@ -1051,7 +1133,7 @@ static bool tune_coarse_stage(profile_t *profile,
                 ESP_LOGI(TAG, "COARSE confirmation failed, back to search");
                 phase = COARSE_PHASE_SEARCH;
                 stable_confirmations = 0;
-                es_generate_candidate(&kp, &kd, kp_min, kp_max, kd_min, kd_max);
+                cd_generate_candidate(&kp, &kd, kp_min, kp_max, kd_min, kd_max);
             }
             continue;
         }
@@ -1127,8 +1209,7 @@ static bool tune_fine_stage(profile_t *profile,
 
     bool tolerance_reached = false;
 
-    s_perturbation_idx = 0;
-    es_init(kp_base, kd_base);
+    cd_init(kp_base, kd_base);
 
     float kp = kp_base;
     float kd = kd_base;
@@ -1224,18 +1305,20 @@ static bool tune_fine_stage(profile_t *profile,
 
         trials_add(2, kp, kd, werr, terr, overshoot, final_w, total_elapsed);
 
-        bool improved = es_update(kp, kd, abs_werr, es_terr, overshoot);
-        if (improved || run == 1) {
-            *best_kp = kp;
-            *best_kd = kd;
-            *best_abs_werr = abs_werr;
-            *best_abs_terr = fabsf(terr);
-            autotune_lock();
-            s_status.fine_best_kp = kp;
-            s_status.fine_best_kd = kd;
-            s_status.fine_best_weight_error = abs_werr;
-            s_status.fine_best_time_error = terr;
-            autotune_unlock();
+        if (phase == FINE_PHASE_SEARCH) {
+            bool improved = cd_update(kp, kd, abs_werr, es_terr, overshoot);
+            if (improved || run == 1) {
+                *best_kp = s_cd.best_kp;
+                *best_kd = s_cd.best_kd;
+                *best_abs_werr = s_cd.best_abs_werr;
+                *best_abs_terr = fabsf(terr);
+                autotune_lock();
+                s_status.fine_best_kp = s_cd.best_kp;
+                s_status.fine_best_kd = s_cd.best_kd;
+                s_status.fine_best_weight_error = s_cd.best_abs_werr;
+                s_status.fine_best_time_error = terr;
+                autotune_unlock();
+            }
         }
 
         autotune_lock();
@@ -1284,7 +1367,7 @@ static bool tune_fine_stage(profile_t *profile,
                 kd = stable_kd;
                 continue;
             }
-            es_generate_candidate(&kp, &kd, kp_min, kp_max, kd_min, kd_max);
+            cd_generate_candidate(&kp, &kd, kp_min, kp_max, kd_min, kd_max);
             continue;
         }
 
@@ -1356,7 +1439,7 @@ static bool tune_fine_stage(profile_t *profile,
                 ESP_LOGI(TAG, "FINE confirmation failed, back to search");
                 phase = FINE_PHASE_SEARCH;
                 stable_confirmations = 0;
-                es_generate_candidate(&kp, &kd, kp_min, kp_max, kd_min, kd_max);
+                cd_generate_candidate(&kp, &kd, kp_min, kp_max, kd_min, kd_max);
             }
             continue;
         }

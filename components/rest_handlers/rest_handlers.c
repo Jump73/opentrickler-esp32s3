@@ -913,12 +913,12 @@ char* rest_autotune_coarse_handler(int num_params, char *params[], char *values[
     bool finish_now = false;
 
     autotune_request_t request = {
-        .coarse_target_weight = 18.5f,
-        .fine_target_weight = 20.0f,
-        .total_target_time_s = 10.0f,
+        .coarse_target_weight = 37.0f,
+        .fine_target_weight = 40.0f,
+        .total_target_time_s = 20.0f,
         .max_runs_per_stage = 15,
-        .coarse_weight_tolerance = 0.10f,
-        .fine_weight_tolerance = 0.03f,
+        .coarse_weight_tolerance = 1.0f,
+        .fine_weight_tolerance = 0.02f,
         .time_tolerance_s = 2.0f,
         .auto_apply = true,
         .save_to_nvs = false,
