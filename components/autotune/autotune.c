@@ -27,7 +27,7 @@ static const char *TAG = "Autotune";
 #define AUTOTUNE_MIN_SPEED_GAIN_S 0.10f
 #define AUTOTUNE_TELEMETRY_MAX 128
 #define AUTOTUNE_MIN_ACCEPT_QUALITY 0.45f
-#define AUTOTUNE_OVERSHOOT_GUARD_GN 0.01f
+#define AUTOTUNE_OVERSHOOT_GUARD_GN 0.03f
 
 typedef struct {
     float data[10];
