@@ -27,6 +27,7 @@ static const char *TAG = "Autotune";
 #define AUTOTUNE_MIN_SPEED_GAIN_S 0.10f
 #define AUTOTUNE_TELEMETRY_MAX 128
 #define AUTOTUNE_MIN_ACCEPT_QUALITY 0.45f
+#define AUTOTUNE_OVERSHOOT_GUARD_GN 0.01f
 
 typedef struct {
     float data[10];
@@ -764,6 +765,7 @@ static bool cd_update(float kp, float kd,
                        float abs_werr, float abs_terr, float overshoot)
 {
     bool improved = false;
+    bool overshoot_guard_active = (fmaxf(0.0f, s_cd.best_overshoot) > AUTOTUNE_OVERSHOOT_GUARD_GN);
 
     switch (s_cd.step) {
         case CD_STEP_BASELINE:
@@ -822,6 +824,14 @@ static bool cd_update(float kp, float kd,
         }
 
         case CD_STEP_KD_POS:
+            if (overshoot_guard_active) {
+                // Overshoot-first policy: when overshoot is still above guard,
+                // prioritize Kp shaping and postpone Kd search.
+                s_cd.delta_kd = fmaxf(s_cd.delta_kd * 0.85f, 0.05f);
+                s_cd.step = CD_STEP_KP_POS;
+                ESP_LOGI(TAG, "CD: overshoot guard active (os=%.4f) - postponing Kd search", s_cd.best_overshoot);
+                break;
+            }
             s_cd.pos_abs_werr  = abs_werr;
             s_cd.pos_abs_terr  = abs_terr;
             s_cd.pos_overshoot = overshoot;
@@ -829,6 +839,12 @@ static bool cd_update(float kp, float kd,
             break;
 
         case CD_STEP_KD_NEG: {
+            if (overshoot_guard_active) {
+                s_cd.delta_kd = fmaxf(s_cd.delta_kd * 0.85f, 0.05f);
+                s_cd.step = CD_STEP_KP_POS;
+                ESP_LOGI(TAG, "CD: overshoot guard active (os=%.4f) - skipping Kd update", s_cd.best_overshoot);
+                break;
+            }
             // Pick the better of (+delta, -delta) for Kd.
             bool pos_wins = es_is_better(s_cd.pos_abs_werr, s_cd.pos_abs_terr, s_cd.pos_overshoot,
                                           abs_werr, abs_terr, overshoot);

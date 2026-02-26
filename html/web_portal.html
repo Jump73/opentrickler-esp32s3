@@ -257,15 +257,15 @@
                     <div class="grid grid-cols-2 gap-x-2 gap-y-1">
                         <div>
                             <span class="label-text text-xs">Coarse Target Weight (gn)</span>
-                            <input id="atParamA1" type="number" class="input input-bordered input-sm w-full" step="0.1" value="18.5">
+                            <input id="atParamA1" type="number" class="input input-bordered input-sm w-full" step="0.1" value="37.0">
                         </div>
                         <div>
                             <span class="label-text text-xs">Total Cycle Time Target (s)</span>
-                            <input id="atParamA2" type="number" class="input input-bordered input-sm w-full" step="0.1" value="10.0">
+                            <input id="atParamA2" type="number" class="input input-bordered input-sm w-full" step="0.1" value="20.0">
                         </div>
                         <div>
                             <span class="label-text text-xs">Fine Target Weight (gn)</span>
-                            <input id="atParamA3" type="number" class="input input-bordered input-sm w-full" step="0.1" value="20.0">
+                            <input id="atParamA3" type="number" class="input input-bordered input-sm w-full" step="0.1" value="40.0">
                         </div>
                         <div>
                             <span class="label-text text-xs">Max Runs per Stage</span>
@@ -273,11 +273,11 @@
                         </div>
                         <div>
                             <span class="label-text text-xs">Coarse Wt Tolerance (gn)</span>
-                            <input id="atParamA6" type="number" class="input input-bordered input-sm w-full" step="0.001" value="0.10">
+                            <input id="atParamA6" type="number" class="input input-bordered input-sm w-full" step="0.001" value="1.00">
                         </div>
                         <div>
                             <span class="label-text text-xs">Fine Wt Tolerance (gn)</span>
-                            <input id="atParamA9" type="number" class="input input-bordered input-sm w-full" step="0.001" value="0.03">
+                            <input id="atParamA9" type="number" class="input input-bordered input-sm w-full" step="0.001" value="0.02">
                         </div>
                         <div>
                             <span class="label-text text-xs">Time Tolerance (s, excess allowed)</span>
@@ -2073,6 +2073,7 @@
             badge.textContent = selected ? selected.text : "—";
         }
     }
+
 
     // Populate the profile selector dropdown
     function autotuneLoadProfiles() {
