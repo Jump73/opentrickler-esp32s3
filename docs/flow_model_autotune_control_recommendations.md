@@ -326,8 +326,28 @@ Persist per-dispense summary in compact ring buffer (NVS or RAM+periodic flush):
 `{timestamp, profile, phase_times, overshoot, e_final, model_confidence, delay, inflight, gains, autotune_flag}`.
 
 This enables objective pass/fail and future offline tuning without heavy on-device computation.
+## H) Stan implementacji (2026-02-27)
+
+| Co | Stan |
+|---|---|
+| Flow model uczy się podczas normalnej pracy (`charge_mode`) | ✅ zaimplementowane |
+| `inertia_overshoot_gn` aktualizuje się podczas normalnej pracy | ✅ zaimplementowane (`FLOW_MODEL_VERSION` → 3) |
+| Dynamiczny `stop_threshold` w autotune (fine motor) | ✅ zaimplementowane — używa `flow_model_get_inertia_overshoot()` gdy model zaufany (≥3 biny × ≥5 próbek), fallback 0.02 gn |
+| Dynamiczny `stop_threshold` w `charge_mode` (fine motor) | ❌ niezaimplementowane — `charge_mode` używa stałego `fine_stop_threshold = 0.03f` z konfiguracji |
+| Automatyczne sugestie korekt Kp/Kd po normalnych dyspensach | ❌ niezaimplementowane |
+| Feedforward w `charge_mode` (użycie modelu w pętli sterowania) | ❌ model jest logowany ale nie używany do sterowania |
+
+### Uwagi do dynamicznego stop_threshold w autotune
+
+`inertia_overshoot_gn` zależy od Kp/Kd (wyższe Kp → silnik szybszy przy stopie → większy overshoot).
+Pętla jest stabilna — istnieje skończony punkt stały gdy `Kp * inertia_s < 1`. EMA samokoryguje się po każdej dyspensie.
+Podczas autotune (zmieniające się Kp/Kd) może przez kilka iteracji dawać lekko zawyżony lub zaniżony próg — akceptowalne dzięki overshoot guard (0.03 gn).
+
+---
+
 ## TODO
 
-1. Integrate the flow model into the control algorithm (feedforward), because `charge_mode` currently operates as pure PD despite model learning and logging.
-2. Implement full HTTP `POST` body parsing in `components/http_server/http_server_ot.c` instead of only logging the payload.
-3. Remove plain-text WiFi/AP password logging in `components/wifi_manager/wifi_manager.c` and replace it with masked output.
+1. Zastosować dynamiczny `stop_threshold` oparty na `flow_model_get_inertia_overshoot()` również w `charge_mode.c` (analogicznie jak w autotune).
+2. Zintegrować flow model z algorytmem sterowania w `charge_mode` (feedforward), bo obecnie `charge_mode` działa jako czysty PD mimo że model jest logowany.
+3. Zaimplementować pełne parsowanie HTTP `POST` body w `components/http_server/http_server_ot.c` zamiast tylko logowania payloadu.
+4. Usunąć logowanie hasła WiFi/AP plain-textem w `components/wifi_manager/wifi_manager.c` i zastąpić maskowanym wyjściem.
