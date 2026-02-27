@@ -389,20 +389,12 @@ static bool run_single_motor_dispense(motor_type_t motor,
                                       float *elapsed_s,
                                       float *max_overshoot)
 {
-    float stop_threshold;
-    if (motor == MOTOR_FINE) {
-        float overshoot = flow_model_get_inertia_overshoot(profile_get_selected_idx(), MOTOR_FINE);
-        if (overshoot > 0.005f) {
-            // Clamp: at least 0.01 gn, at most 0.10 gn
-            if (overshoot < 0.01f) overshoot = 0.01f;
-            if (overshoot > 0.10f) overshoot = 0.10f;
-            stop_threshold = overshoot;
-        } else {
-            stop_threshold = 0.02f;
-        }
-    } else {
-        stop_threshold = 0.03f;
-    }
+    // Fixed stop thresholds during autotune. Dynamic stop_threshold (based on
+    // flow model inertia) is intentionally NOT used here: autotune changes Kp/Kd
+    // every trial, so the inertia EMA would learn from different operating points
+    // and produce a moving stop_threshold that destabilises the search.
+    // Dynamic stop_threshold is applied in charge_mode (normal operation) only.
+    const float stop_threshold = (motor == MOTOR_FINE) ? 0.02f : 0.03f;
 
     float last_error = target_weight;
     float peak_weight = 0.0f;  // track max weight during dispensing
@@ -1176,6 +1168,9 @@ static bool tune_coarse_stage(profile_t *profile,
                 ESP_LOGI(TAG, "COARSE confirmation failed, back to search");
                 phase = COARSE_PHASE_SEARCH;
                 stable_confirmations = 0;
+                if (positive_overshoot > s_cd.best_overshoot) {
+                    s_cd.best_overshoot = positive_overshoot;
+                }
                 cd_generate_candidate(&kp, &kd, kp_min, kp_max, kd_min, kd_max);
             }
             continue;
@@ -1482,6 +1477,11 @@ static bool tune_fine_stage(profile_t *profile,
                 ESP_LOGI(TAG, "FINE confirmation failed, back to search");
                 phase = FINE_PHASE_SEARCH;
                 stable_confirmations = 0;
+                // If confirm failed due to overshoot, tell CD so it skips KP_POS
+                // (raising Kp would only make overshoot worse).
+                if (positive_overshoot > s_cd.best_overshoot) {
+                    s_cd.best_overshoot = positive_overshoot;
+                }
                 cd_generate_candidate(&kp, &kd, kp_min, kp_max, kd_min, kd_max);
             }
             continue;
