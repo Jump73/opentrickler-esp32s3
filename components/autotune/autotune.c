@@ -390,14 +390,18 @@ static bool run_single_motor_dispense(motor_type_t motor,
                                       float *max_overshoot)
 {
     float stop_threshold;
-    if (motor == MOTOR_FINE && flow_model_is_trusted(profile_get_selected_idx(), MOTOR_FINE)) {
+    if (motor == MOTOR_FINE) {
         float overshoot = flow_model_get_inertia_overshoot(profile_get_selected_idx(), MOTOR_FINE);
-        // Clamp: at least 0.01 gn, at most 0.10 gn
-        if (overshoot < 0.01f) overshoot = 0.01f;
-        if (overshoot > 0.10f) overshoot = 0.10f;
-        stop_threshold = overshoot;
+        if (overshoot > 0.005f) {
+            // Clamp: at least 0.01 gn, at most 0.10 gn
+            if (overshoot < 0.01f) overshoot = 0.01f;
+            if (overshoot > 0.10f) overshoot = 0.10f;
+            stop_threshold = overshoot;
+        } else {
+            stop_threshold = 0.02f;
+        }
     } else {
-        stop_threshold = (motor == MOTOR_FINE) ? 0.02f : 0.03f;
+        stop_threshold = 0.03f;
     }
 
     float last_error = target_weight;
@@ -745,10 +749,24 @@ static void cd_generate_candidate(float *kp, float *kd,
             *kd = s_cd.best_kd;
             break;
         case CD_STEP_KP_POS:
-            *kp = clampf(s_cd.best_kp * expf(+s_cd.delta_kp), kp_min, kp_max);
-            *kd = s_cd.best_kd;
-            s_cd.pos_kp = *kp;
-            s_cd.pos_kd = *kd;
+            if (fmaxf(0.0f, s_cd.best_overshoot) > 0.0f) {
+                // Best already overshoots: higher Kp only makes it worse.
+                // Fake KP_POS as terrible so KP_NEG wins, skip directly to KP_NEG.
+                s_cd.pos_abs_werr  = 1e9f;
+                s_cd.pos_abs_terr  = 1e9f;
+                s_cd.pos_overshoot = 1e9f;
+                s_cd.pos_kp        = s_cd.best_kp;
+                s_cd.pos_kd        = s_cd.best_kd;
+                s_cd.step          = CD_STEP_KP_NEG;
+                *kp = clampf(s_cd.best_kp * expf(-s_cd.delta_kp), kp_min, kp_max);
+                *kd = s_cd.best_kd;
+                ESP_LOGI(TAG, "CD: KP_POS skipped (best overshoots), testing KP_NEG directly");
+            } else {
+                *kp = clampf(s_cd.best_kp * expf(+s_cd.delta_kp), kp_min, kp_max);
+                *kd = s_cd.best_kd;
+                s_cd.pos_kp = *kp;
+                s_cd.pos_kd = *kd;
+            }
             break;
         case CD_STEP_KP_NEG:
             *kp = clampf(s_cd.best_kp * expf(-s_cd.delta_kp), kp_min, kp_max);
