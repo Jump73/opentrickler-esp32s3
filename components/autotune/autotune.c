@@ -1074,11 +1074,15 @@ static bool tune_coarse_stage(profile_t *profile,
         float positive_overshoot = fmaxf(0.0f, overshoot);
         float run_quality = get_stage_quality(AUTOTUNE_STAGE_COARSE);
         float quality_floor = fmaxf(AUTOTUNE_MIN_ACCEPT_QUALITY, telemetry_recent_quality_mean(AUTOTUNE_STAGE_COARSE, 8) * 0.70f);
-        bool accepted = (abs_werr <= s_request.coarse_weight_tolerance) &&
-                        (positive_overshoot <= s_request.coarse_weight_tolerance) &&
-                        (run_quality >= quality_floor);
+        bool weight_ok = (abs_werr <= s_request.coarse_weight_tolerance) &&
+                         (positive_overshoot <= s_request.coarse_weight_tolerance);
+        bool accepted = weight_ok && (run_quality >= quality_floor);
+        // For CONFIRM/SPEED_PROBE only weight accuracy matters (quality already checked in SEARCH).
+        bool effective_accepted = (phase == COARSE_PHASE_SEARCH) ? accepted : weight_ok;
+        ESP_LOGI(TAG, "COARSE quality: q=%.2f floor=%.2f weight_ok=%d quality_ok=%d accepted=%d (phase=%d)",
+                 run_quality, quality_floor, weight_ok, (run_quality >= quality_floor), effective_accepted, (int)phase);
         telemetry_add(AUTOTUNE_STAGE_COARSE, (uint8_t)phase, kp, kd, final_w, elapsed_s,
-                      overshoot, abs_werr, run_quality, accepted);
+                      overshoot, abs_werr, run_quality, effective_accepted);
 
         if (phase == COARSE_PHASE_SEARCH) {
             if (accepted) {
@@ -1104,7 +1108,9 @@ static bool tune_coarse_stage(profile_t *profile,
         }
 
         if (phase == COARSE_PHASE_CONFIRM) {
-            if (accepted) {
+            // In CONFIRM we only require weight accuracy — quality was already
+            // validated when the SEARCH phase accepted this candidate.
+            if (weight_ok) {
                 stable_confirmations++;
                 if (elapsed_s < stable_time_s) {
                     stable_time_s = elapsed_s;
@@ -1179,7 +1185,7 @@ static bool tune_coarse_stage(profile_t *profile,
         }
 
         // COARSE_PHASE_SPEED_PROBE
-        bool faster_and_precise = accepted && (elapsed_s + AUTOTUNE_MIN_SPEED_GAIN_S < stable_time_s);
+        bool faster_and_precise = weight_ok && (elapsed_s + AUTOTUNE_MIN_SPEED_GAIN_S < stable_time_s);
         if (faster_and_precise) {
             fallback_kp = stable_kp;
             fallback_kd = stable_kd;
@@ -1383,11 +1389,15 @@ static bool tune_fine_stage(profile_t *profile,
         float positive_overshoot = fmaxf(0.0f, overshoot);
         float run_quality = get_stage_quality(AUTOTUNE_STAGE_FINE);
         float quality_floor = fmaxf(AUTOTUNE_MIN_ACCEPT_QUALITY, telemetry_recent_quality_mean(AUTOTUNE_STAGE_FINE, 8) * 0.70f);
-        bool accepted = (abs_werr <= s_request.fine_weight_tolerance) &&
-                        (positive_overshoot <= s_request.fine_weight_tolerance) &&
-                        (run_quality >= quality_floor);
+        bool weight_ok = (abs_werr <= s_request.fine_weight_tolerance) &&
+                         (positive_overshoot <= s_request.fine_weight_tolerance);
+        bool accepted = weight_ok && (run_quality >= quality_floor);
+        // For CONFIRM/SPEED_PROBE only weight accuracy matters (quality already checked in SEARCH).
+        bool effective_accepted = (phase == FINE_PHASE_SEARCH) ? accepted : weight_ok;
+        ESP_LOGI(TAG, "FINE quality: q=%.2f floor=%.2f weight_ok=%d quality_ok=%d accepted=%d (phase=%d)",
+                 run_quality, quality_floor, weight_ok, (run_quality >= quality_floor), effective_accepted, (int)phase);
         telemetry_add(AUTOTUNE_STAGE_FINE, (uint8_t)phase, kp, kd, final_w, total_elapsed,
-                      overshoot, abs_werr, run_quality, accepted);
+                      overshoot, abs_werr, run_quality, effective_accepted);
 
         if (phase == FINE_PHASE_SEARCH) {
             if (accepted) {
@@ -1412,7 +1422,9 @@ static bool tune_fine_stage(profile_t *profile,
         }
 
         if (phase == FINE_PHASE_CONFIRM) {
-            if (accepted) {
+            // In CONFIRM we only require weight accuracy — quality was already
+            // validated when the SEARCH phase accepted this candidate.
+            if (weight_ok) {
                 stable_confirmations++;
                 if (total_elapsed < stable_total_time_s) {
                     stable_total_time_s = total_elapsed;
@@ -1500,7 +1512,7 @@ static bool tune_fine_stage(profile_t *profile,
                      over_guard_kp_ceiling, over_guard_kd_floor);
         }
 
-        bool faster_and_precise = accepted && (total_elapsed + AUTOTUNE_MIN_SPEED_GAIN_S < stable_total_time_s);
+        bool faster_and_precise = weight_ok && (total_elapsed + AUTOTUNE_MIN_SPEED_GAIN_S < stable_total_time_s);
         if (faster_and_precise) {
             fallback_kp = stable_kp;
             fallback_kd = stable_kd;
