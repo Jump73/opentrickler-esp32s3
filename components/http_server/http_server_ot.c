@@ -2,6 +2,27 @@
 #include "esp_log.h"
 #include "esp_http_server.h"
 #include <string.h>
+#include <stdlib.h>
+
+// Decode percent-encoded URL string in-place. Returns dst (same as src).
+static char *url_decode_inplace(char *s)
+{
+    char *src = s, *dst = s;
+    while (*src) {
+        if (*src == '%' && src[1] && src[2]) {
+            char hex[3] = { src[1], src[2], '\0' };
+            *dst++ = (char)strtol(hex, NULL, 16);
+            src += 3;
+        } else if (*src == '+') {
+            *dst++ = ' ';
+            src++;
+        } else {
+            *dst++ = *src++;
+        }
+    }
+    *dst = '\0';
+    return s;
+}
 
 static const char *TAG = "HTTP_Server";
 
@@ -72,6 +93,7 @@ static esp_err_t rest_handler_wrapper(httpd_req_t *req)
                         *eq = '\0';
                         param_names[num_params] = token;
                         param_values[num_params] = eq + 1;
+                        url_decode_inplace(param_values[num_params]);
                         num_params++;
                     }
                     token = strtok(NULL, "&");

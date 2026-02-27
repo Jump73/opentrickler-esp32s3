@@ -284,6 +284,7 @@
                             <input id="atParamA7" type="number" class="input input-bordered input-sm w-full" step="0.1" value="2.0">
                         </div>
                     </div>
+
                 </div>
 
                 <!-- Start / Cancel / Save buttons -->
@@ -1703,7 +1704,7 @@
             for (const idx in allProfiles) {
                 var option = document.createElement("option");
                 option.value = idx;
-                option.innerText = `#${idx} ${allProfiles[idx]}`;
+                option.innerText = `#${idx} ${decodeURIComponent(allProfiles[idx])}`;
                 select.appendChild(option);
             }
             select.value = currentIdx;
@@ -1729,7 +1730,7 @@
             for (const key in data) {
                 const element = form.querySelector('[name="' + key + '"]');
                 if (element) {
-                    element.value = String(data[key]);
+                    element.value = key === 'p2' ? decodeURIComponent(String(data[key])) : String(data[key]);
                 }
             }
         })
@@ -2074,7 +2075,6 @@
         }
     }
 
-
     // Populate the profile selector dropdown
     function autotuneLoadProfiles() {
         fetch("/rest/profile_summary")
@@ -2088,7 +2088,7 @@
             for (const idx in allProfiles) {
                 var option = document.createElement("option");
                 option.value = idx;
-                option.innerText = allProfiles[idx];
+                option.innerText = decodeURIComponent(allProfiles[idx]);
                 select.appendChild(option);
             }
             select.value = currentIdx;

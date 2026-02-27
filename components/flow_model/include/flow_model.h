@@ -31,11 +31,12 @@ typedef struct {
     uint8_t      num_points;
     float        transport_delay_ms;        // time from motor start to first weight change
     float        inertia_factor_s;          // seconds of "in-flight" powder after motor stop
+    float        inertia_overshoot_gn;      // expected weight added after motor stop (gn)
     float        last_quality;              // quality score of last dispense (0..1)
     flow_point_t points[FLOW_TABLE_POINTS];
 } flow_model_single_t;
 
-#define FLOW_MODEL_VERSION  2
+#define FLOW_MODEL_VERSION  3
 
 // Per-profile flow model (both motors)
 typedef struct {
@@ -60,6 +61,7 @@ float flow_model_get_flow_rate(uint8_t profile_idx, uint8_t motor, float speed_r
 float flow_model_get_speed_for_rate(uint8_t profile_idx, uint8_t motor, float desired_gn_s);
 float flow_model_get_transport_delay(uint8_t profile_idx, uint8_t motor);
 float flow_model_get_inertia(uint8_t profile_idx, uint8_t motor);
+float flow_model_get_inertia_overshoot(uint8_t profile_idx, uint8_t motor);
 
 // Persistence
 esp_err_t flow_model_save(uint8_t profile_idx);

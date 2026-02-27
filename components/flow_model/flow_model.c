@@ -430,14 +430,16 @@ esp_err_t flow_model_analyze_and_update(uint8_t profile_idx)
                 float inertia_s = overshoot_gn / pre_stop_flow;
 
                 if (inertia_s > 0.0f && inertia_s < 5.0f) {
+                    float inertia_alpha = EMA_ALPHA * quality;
                     if (model->inertia_factor_s < 0.001f) {
                         model->inertia_factor_s = inertia_s;
+                        model->inertia_overshoot_gn = overshoot_gn;
                     } else {
-                        float inertia_alpha = EMA_ALPHA * quality;
                         model->inertia_factor_s = (1.0f - inertia_alpha) * model->inertia_factor_s + inertia_alpha * inertia_s;
+                        model->inertia_overshoot_gn = (1.0f - inertia_alpha) * model->inertia_overshoot_gn + inertia_alpha * overshoot_gn;
                     }
-                    ESP_LOGI(TAG, "  inertia=%.3f s (overshoot=%.3f gn, pre_flow=%.3f gn/s)",
-                             model->inertia_factor_s, overshoot_gn, pre_stop_flow);
+                    ESP_LOGI(TAG, "  inertia=%.3f s, overshoot_gn=%.3f gn (pre_flow=%.3f gn/s)",
+                             model->inertia_factor_s, model->inertia_overshoot_gn, pre_stop_flow);
                 }
             }
         }
@@ -530,6 +532,12 @@ float flow_model_get_inertia(uint8_t profile_idx, uint8_t motor)
 {
     flow_model_single_t *m = get_single_model(profile_idx, motor);
     return m ? m->inertia_factor_s : 0.0f;
+}
+
+float flow_model_get_inertia_overshoot(uint8_t profile_idx, uint8_t motor)
+{
+    flow_model_single_t *m = get_single_model(profile_idx, motor);
+    return m ? m->inertia_overshoot_gn : 0.0f;
 }
 
 bool flow_model_is_trusted(uint8_t profile_idx, uint8_t motor)

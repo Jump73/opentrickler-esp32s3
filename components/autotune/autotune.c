@@ -389,7 +389,16 @@ static bool run_single_motor_dispense(motor_type_t motor,
                                       float *elapsed_s,
                                       float *max_overshoot)
 {
-    const float stop_threshold = (motor == MOTOR_FINE) ? 0.02f : 0.03f;
+    float stop_threshold;
+    if (motor == MOTOR_FINE && flow_model_is_trusted(profile_get_selected_idx(), MOTOR_FINE)) {
+        float overshoot = flow_model_get_inertia_overshoot(profile_get_selected_idx(), MOTOR_FINE);
+        // Clamp: at least 0.01 gn, at most 0.10 gn
+        if (overshoot < 0.01f) overshoot = 0.01f;
+        if (overshoot > 0.10f) overshoot = 0.10f;
+        stop_threshold = overshoot;
+    } else {
+        stop_threshold = (motor == MOTOR_FINE) ? 0.02f : 0.03f;
+    }
 
     float last_error = target_weight;
     float peak_weight = 0.0f;  // track max weight during dispensing
@@ -1118,7 +1127,7 @@ static bool tune_coarse_stage(profile_t *profile,
                     float adaptive_step = AUTOTUNE_SPEED_PROBE_GAIN_STEP * (0.70f + 0.60f * clampf(q, 0.0f, 1.0f));
                     float speed_factor = 1.0f + adaptive_step * (float)(speed_probe_idx + 1);
                     kp = clampf(stable_kp * speed_factor, kp_min, kp_max);
-                    kd = clampf(stable_kd * speed_factor, kd_min, kd_max);
+                    kd = stable_kd;
                     ESP_LOGI(TAG, "COARSE stable confirmed, starting speed probes");
                 } else {
                     kp = stable_kp;
@@ -1201,7 +1210,7 @@ static bool tune_coarse_stage(profile_t *profile,
         float adaptive_step = AUTOTUNE_SPEED_PROBE_GAIN_STEP * (0.70f + 0.60f * clampf(q, 0.0f, 1.0f));
         float speed_factor = 1.0f + adaptive_step * (float)(speed_probe_idx + 1);
         kp = clampf(stable_kp * speed_factor, kp_min, kp_max);
-        kd = clampf(stable_kd * speed_factor, kd_min, kd_max);
+        kd = stable_kd;
     }
 
     return tolerance_reached;
