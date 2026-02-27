@@ -920,6 +920,8 @@ char* rest_autotune_coarse_handler(int num_params, char *params[], char *values[
         .coarse_weight_tolerance = 1.0f,
         .fine_weight_tolerance = 0.02f,
         .time_tolerance_s = 2.0f,
+        .fine_stop_threshold = 0.02f,
+        .coarse_stop_threshold = 0.03f,
         .auto_apply = true,
         .save_to_nvs = false,
     };
@@ -948,6 +950,12 @@ char* rest_autotune_coarse_handler(int num_params, char *params[], char *values[
         }
         else if (strcmp(params[idx], "a7") == 0) {
             request.time_tolerance_s = strtof(values[idx], NULL);
+        }
+        else if (strcmp(params[idx], "a10") == 0) {
+            request.fine_stop_threshold = strtof(values[idx], NULL);
+        }
+        else if (strcmp(params[idx], "a11") == 0) {
+            request.coarse_stop_threshold = strtof(values[idx], NULL);
         }
         else if (strcmp(params[idx], "a8") == 0) {
             request.auto_apply = string_to_boolean(values[idx]);

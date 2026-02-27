@@ -283,6 +283,14 @@
                             <span class="label-text text-xs">Time Tolerance (s, excess allowed)</span>
                             <input id="atParamA7" type="number" class="input input-bordered input-sm w-full" step="0.1" value="2.0">
                         </div>
+                        <div>
+                            <span class="label-text text-xs">Fine Stop Threshold (gn)</span>
+                            <input id="atParamA10" type="number" class="input input-bordered input-sm w-full" step="0.005" value="0.02">
+                        </div>
+                        <div>
+                            <span class="label-text text-xs">Coarse Stop Threshold (gn)</span>
+                            <input id="atParamA11" type="number" class="input input-bordered input-sm w-full" step="0.005" value="0.03">
+                        </div>
                     </div>
 
                 </div>
@@ -2114,8 +2122,10 @@
             const a6 = document.getElementById("atParamA6").value;
             const a9 = document.getElementById("atParamA9").value;
             const a7 = document.getElementById("atParamA7").value;
+            const a10 = document.getElementById("atParamA10").value;
+            const a11 = document.getElementById("atParamA11").value;
 
-            const uri = `/rest/autotune_coarse?a0=true&a1=${encodeURIComponent(a1)}&a2=${encodeURIComponent(a2)}&a3=${encodeURIComponent(a3)}&a5=${encodeURIComponent(a5)}&a6=${encodeURIComponent(a6)}&a9=${encodeURIComponent(a9)}&a7=${encodeURIComponent(a7)}&a8=false&ee=false`;
+            const uri = `/rest/autotune_coarse?a0=true&a1=${encodeURIComponent(a1)}&a2=${encodeURIComponent(a2)}&a3=${encodeURIComponent(a3)}&a5=${encodeURIComponent(a5)}&a6=${encodeURIComponent(a6)}&a9=${encodeURIComponent(a9)}&a7=${encodeURIComponent(a7)}&a10=${encodeURIComponent(a10)}&a11=${encodeURIComponent(a11)}&a8=false&ee=false`;
 
             return fetch(uri);
         })

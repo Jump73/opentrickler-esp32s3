@@ -394,7 +394,9 @@ static bool run_single_motor_dispense(motor_type_t motor,
     // every trial, so the inertia EMA would learn from different operating points
     // and produce a moving stop_threshold that destabilises the search.
     // Dynamic stop_threshold is applied in charge_mode (normal operation) only.
-    const float stop_threshold = (motor == MOTOR_FINE) ? 0.02f : 0.03f;
+    const float stop_threshold = (motor == MOTOR_FINE)
+        ? (s_request.fine_stop_threshold   > 0.001f ? s_request.fine_stop_threshold   : 0.02f)
+        : (s_request.coarse_stop_threshold > 0.001f ? s_request.coarse_stop_threshold : 0.03f);
 
     float last_error = target_weight;
     float peak_weight = 0.0f;  // track max weight during dispensing

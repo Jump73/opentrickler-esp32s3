@@ -41,6 +41,9 @@ typedef struct {
     float fine_weight_tolerance;    // grains
     float time_tolerance_s;         // allowed excess over total_target_time_s (seconds)
 
+    float fine_stop_threshold;      // gn below target at which fine motor stops (default 0.02)
+    float coarse_stop_threshold;    // gn below target at which coarse motor stops (default 0.03)
+
     bool auto_apply;
     bool save_to_nvs;
 } autotune_request_t;
