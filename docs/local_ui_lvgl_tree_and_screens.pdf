@@ -1,0 +1,821 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Courier /Encoding /WinAnsiEncoding >>
+endobj
+2 0 obj
+<< /Length 2874 >>
+stream
+BT
+/F1 9 Tf
+1 0 0 1 36 806 Tm
+11 TL
+(OpenTrickler ESP32-S3 - Lokalne UI \(LVGL, bez Web UI\)) Tj
+T*
+(Zrodlo: components/ui_screens/ui_screens.c) Tj
+T*
+() Tj
+T*
+(============================================================) Tj
+T*
+(1\) DRZEWKO LOKALNEGO UI) Tj
+T*
+(============================================================) Tj
+T*
+() Tj
+T*
+(MAIN MENU) Tj
+T*
+(|- Start) Tj
+T*
+(|  |- Profile Select \(lista profili z NVS\)) Tj
+T*
+(|  |  |- <nazwa profilu 1..N>) Tj
+T*
+(|  |  |  |- Weight Input \(edycja cyfr wagi\)) Tj
+T*
+(|  |  |  |  |- Start) Tj
+T*
+(|  |  |  |  |  |- Charge Mode) Tj
+T*
+(|  |  |  |  |  \\- < Back -> MAIN MENU) Tj
+T*
+(|  |  |  |  \\- < Back -> Profile Select) Tj
+T*
+(|  |  \\- < Back -> MAIN MENU) Tj
+T*
+(|- Cleanup) Tj
+T*
+(|  \\- Cleanup Mode) Tj
+T*
+(|     \\- Stop -> MAIN MENU) Tj
+T*
+(|- Wireless) Tj
+T*
+(|  \\- Wireless Info) Tj
+T*
+(|     \\- < Back -> MAIN MENU) Tj
+T*
+(\\- Settings) Tj
+T*
+(   |- Scale) Tj
+T*
+(   |  \\- Scale Settings) Tj
+T*
+(   |     |- Set Driver) Tj
+T*
+(   |     |  \\- [A&D FX-i, Steinberg SBS, G&G JJB, US Solid JFDBS,) Tj
+T*
+(   |     |      JM Science, Creedmoor, Radwag PS R2, Sartorius, Generic]) Tj
+T*
+(   |     |     \\- wybor -> Scale Settings) Tj
+T*
+(   |     |- Set Baudrate) Tj
+T*
+(   |     |  \\- [4800, 9600, 19200]) Tj
+T*
+(   |     |     \\- wybor -> Scale Settings) Tj
+T*
+(   |     \\- < Back -> Settings) Tj
+T*
+(   |- Profiles) Tj
+T*
+(   |  \\- Profile View \(aktualnie wybrany profil\)) Tj
+T*
+(   |     \\- < Back -> Settings) Tj
+T*
+(   |- Save NVS      \(akcja, bez nowego ekranu\)) Tj
+T*
+(   |- Erase NVS     \(akcja + reboot, bez nowego ekranu\)) Tj
+T*
+(   |- Version) Tj
+T*
+(   |  \\- Version Info) Tj
+T*
+(   |     \\- < Back -> Settings) Tj
+T*
+(   |- Reboot        \(akcja, bez nowego ekranu\)) Tj
+T*
+(   \\- < Back -> MAIN MENU) Tj
+T*
+() Tj
+T*
+(Kolejnosc inicjalizacji ekranow po starcie:) Tj
+T*
+(Main Menu -> Weight Input -> Charge -> Cleanup -> Wireless -> Settings -> Scale Settings -> Version) Tj
+T*
+(Aktywny na starcie: Main Menu \(ui_screens.c:825\)) Tj
+T*
+() Tj
+T*
+(Stany Charge Mode \(ten sam ekran\):) Tj
+T*
+(Idle, Wait Zero, Dispensing, Remove Cup, Return Cup \(ui_screens.c:180\)) Tj
+T*
+() Tj
+T*
+(============================================================) Tj
+T*
+(2\) ASCII MOCKUPY EKRANOW \(LCD 128x64\)) Tj
+T*
+(============================================================) Tj
+T*
+() Tj
+T*
+([MAIN MENU]) Tj
+T*
+(+------------------------------+) Tj
+T*
+(| [Start]                      |) Tj
+T*
+(| [Cleanup]                    |) Tj
+T*
+(| [Wireless]                   |) Tj
+T*
+(| [Settings]                   |) Tj
+T*
+(+------------------------------+) Tj
+T*
+() Tj
+T*
+([PROFILE SELECT]) Tj
+T*
+(+------------------------------+) Tj
+T*
+(| [Profil_1]                   |) Tj
+T*
+(| [Profil_2]                   |) Tj
+T*
+(| [Profil_3]                   |) Tj
+T*
+(| ...                          |) Tj
+ET
+endstream
+endobj
+3 0 obj
+<< /Length 2573 >>
+stream
+BT
+/F1 9 Tf
+1 0 0 1 36 806 Tm
+11 TL
+(| [< Back]                     |) Tj
+T*
+(+------------------------------+) Tj
+T*
+() Tj
+T*
+([WEIGHT INPUT]) Tj
+T*
+(+------------------------------+) Tj
+T*
+(| Set Weight:                  |) Tj
+T*
+(|        [4][1].[5][0] gr      |   \(albo [4][1].[5][0][0] gr\)) Tj
+T*
+(|                              |) Tj
+T*
+(| Turn:Move Click:+1           |) Tj
+T*
+(| [Start]            [< Back]  |) Tj
+T*
+(+------------------------------+) Tj
+T*
+() Tj
+T*
+([CHARGE MODE]) Tj
+T*
+(+------------------------------+) Tj
+T*
+(| Wait Zero               1.2s |) Tj
+T*
+(| Target: 41.50                 |) Tj
+T*
+(|                              |) Tj
+T*
+(|            41.47             |) Tj
+T*
+(|          UNDER CHARGE        |   \(lub OVER CHARGE / OK\)) Tj
+T*
+(|                     ProfileX |) Tj
+T*
+(| [< Back]                     |) Tj
+T*
+(+------------------------------+) Tj
+T*
+() Tj
+T*
+([CLEANUP MODE]) Tj
+T*
+(+------------------------------+) Tj
+T*
+(| Cleanup Mode          W: 2.31|) Tj
+T*
+(|                              |) Tj
+T*
+(|           3.5 rps            |) Tj
+T*
+(|                              |) Tj
+T*
+(| Turn=Speed                   |) Tj
+T*
+(| [Stop]                       |) Tj
+T*
+(+------------------------------+) Tj
+T*
+() Tj
+T*
+([WIRELESS]) Tj
+T*
+(+------------------------------+) Tj
+T*
+(| WiFi: Connected              |) Tj
+T*
+(| IP: 192.168.1.120            |) Tj
+T*
+(| [< Back]                     |) Tj
+T*
+(+------------------------------+) Tj
+T*
+() Tj
+T*
+([SETTINGS]) Tj
+T*
+(+------------------------------+) Tj
+T*
+(| [Scale]                      |) Tj
+T*
+(| [Profiles]                   |) Tj
+T*
+(| [Save NVS]                   |) Tj
+T*
+(| [Erase NVS]                  |) Tj
+T*
+(| [Version]                    |) Tj
+T*
+(| [Reboot]                     |) Tj
+T*
+(| [< Back]                     |) Tj
+T*
+(+------------------------------+) Tj
+T*
+() Tj
+T*
+([SCALE SETTINGS]) Tj
+T*
+(+------------------------------+) Tj
+T*
+(| Drv: A&D FX-i                |) Tj
+T*
+(| Baud: 9600                   |) Tj
+T*
+(| [Set Driver]                 |) Tj
+T*
+(| [Set Baudrate]               |) Tj
+T*
+(| [< Back]                     |) Tj
+T*
+(+------------------------------+) Tj
+T*
+() Tj
+T*
+([SET DRIVER]) Tj
+T*
+(+------------------------------+) Tj
+T*
+(| [A&D FX-i]                   |) Tj
+T*
+(| [Steinberg SBS]              |) Tj
+T*
+(| [G&G JJB]                    |) Tj
+T*
+(| ...                          |) Tj
+T*
+(| [Generic]                    |) Tj
+T*
+(| [< Back]                     |) Tj
+T*
+(+------------------------------+) Tj
+T*
+() Tj
+ET
+endstream
+endobj
+4 0 obj
+<< /Length 3198 >>
+stream
+BT
+/F1 9 Tf
+1 0 0 1 36 806 Tm
+11 TL
+([SET BAUDRATE]) Tj
+T*
+(+------------------------------+) Tj
+T*
+(| [4800]                       |) Tj
+T*
+(| [9600]                       |) Tj
+T*
+(| [19200]                      |) Tj
+T*
+(| [< Back]                     |) Tj
+T*
+(+------------------------------+) Tj
+T*
+() Tj
+T*
+([PROFILE VIEW]) Tj
+T*
+(+------------------------------+) Tj
+T*
+(| ProfileName                  |) Tj
+T*
+(| C: kp/ki/kd                  |) Tj
+T*
+(|    min-max rps               |) Tj
+T*
+(| F: kp/ki/kd                  |) Tj
+T*
+(|    min-max rps               |) Tj
+T*
+(| [< Back]                     |) Tj
+T*
+(+------------------------------+) Tj
+T*
+() Tj
+T*
+([VERSION]) Tj
+T*
+(+------------------------------+) Tj
+T*
+(| FW: x.y.z                    |) Tj
+T*
+(| Git: abc1234                 |) Tj
+T*
+(| Build: Release               |) Tj
+T*
+(| ID: OT-xxxx                  |) Tj
+T*
+(| [< Back]                     |) Tj
+T*
+(+------------------------------+) Tj
+T*
+() Tj
+T*
+(============================================================) Tj
+T*
+(3\) MAPA NAWIGACJI \(BLOKOWA\)) Tj
+T*
+(============================================================) Tj
+T*
+() Tj
+T*
+(START) Tj
+T*
+(  |) Tj
+T*
+(  v) Tj
+T*
+(+------------------+) Tj
+T*
+(|    MAIN MENU     |) Tj
+T*
+(| Start            |) Tj
+T*
+(| Cleanup          |) Tj
+T*
+(| Wireless         |) Tj
+T*
+(| Settings         |) Tj
+T*
+(+------------------+) Tj
+T*
+(   |        |           |            |) Tj
+T*
+(   |        |           |            v) Tj
+T*
+(   |        |           |      +------------------+) Tj
+T*
+(   |        |           |      |     SETTINGS     |) Tj
+T*
+(   |        |           |      | Scale            |) Tj
+T*
+(   |        |           |      | Profiles         |) Tj
+T*
+(   |        |           |      | Save NVS \(akcja\) |) Tj
+T*
+(   |        |           |      | Erase NVS \(akcja\)|) Tj
+T*
+(   |        |           |      | Version          |) Tj
+T*
+(   |        |           |      | Reboot \(akcja\)   |) Tj
+T*
+(   |        |           |      | < Back -> MAIN   |) Tj
+T*
+(   |        |           |      +------------------+) Tj
+T*
+(   |        |           |          |       |      |) Tj
+T*
+(   |        |           |          |       |      v) Tj
+T*
+(   |        |           |          |       |  +------------------+) Tj
+T*
+(   |        |           |          |       |  |     VERSION      |) Tj
+T*
+(   |        |           |          |       |  | FW/Git/Build/ID  |) Tj
+T*
+(   |        |           |          |       |  | < Back->SETTINGS |) Tj
+T*
+(   |        |           |          |       |  +------------------+) Tj
+T*
+(   |        |           |          |       |) Tj
+T*
+(   |        |           |          |       v) Tj
+T*
+(   |        |           |          |  +------------------+) Tj
+T*
+(   |        |           |          |  |   PROFILE VIEW   |) Tj
+T*
+(   |        |           |          |  | dane profilu     |) Tj
+T*
+(   |        |           |          |  | < Back->SETTINGS |) Tj
+T*
+(   |        |           |          |  +------------------+) Tj
+T*
+(   |        |           |          |) Tj
+T*
+(   |        |           |          v) Tj
+T*
+(   |        |           |    +------------------+) Tj
+ET
+endstream
+endobj
+5 0 obj
+<< /Length 2877 >>
+stream
+BT
+/F1 9 Tf
+1 0 0 1 36 806 Tm
+11 TL
+(   |        |           |    |  SCALE SETTINGS  |) Tj
+T*
+(   |        |           |    | Drv: ...         |) Tj
+T*
+(   |        |           |    | Baud: ...        |) Tj
+T*
+(   |        |           |    | Set Driver       |) Tj
+T*
+(   |        |           |    | Set Baudrate     |) Tj
+T*
+(   |        |           |    | < Back->SETTINGS |) Tj
+T*
+(   |        |           |    +------------------+) Tj
+T*
+(   |        |           |       |          |) Tj
+T*
+(   |        |           |       |          v) Tj
+T*
+(   |        |           |       |    +------------------+) Tj
+T*
+(   |        |           |       |    |  SET BAUDRATE    |) Tj
+T*
+(   |        |           |       |    | 4800 / 9600/19200|) Tj
+T*
+(   |        |           |       |    | wybor->SCALE SET |) Tj
+T*
+(   |        |           |       |    | < Back->SCALE SET|) Tj
+T*
+(   |        |           |       |    +------------------+) Tj
+T*
+(   |        |           |       |) Tj
+T*
+(   |        |           |       v) Tj
+T*
+(   |        |           |    +------------------+) Tj
+T*
+(   |        |           |    |   SET DRIVER     |) Tj
+T*
+(   |        |           |    | lista sterownikow|) Tj
+T*
+(   |        |           |    | wybor->SCALE SET |) Tj
+T*
+(   |        |           |    | < Back->SCALE SET|) Tj
+T*
+(   |        |           |    +------------------+) Tj
+T*
+(   |        |           |) Tj
+T*
+(   |        |           v) Tj
+T*
+(   |        |    +------------------+) Tj
+T*
+(   |        |    |     WIRELESS     |) Tj
+T*
+(   |        |    | WiFi status      |) Tj
+T*
+(   |        |    | IP               |) Tj
+T*
+(   |        |    | < Back -> MAIN   |) Tj
+T*
+(   |        |    +------------------+) Tj
+T*
+(   |        |) Tj
+T*
+(   |        v) Tj
+T*
+(   |  +------------------+) Tj
+T*
+(   |  |    CLEANUP MODE  |) Tj
+T*
+(   |  | speed \(encoder\)  |) Tj
+T*
+(   |  | weight live      |) Tj
+T*
+(   |  | Stop -> MAIN     |) Tj
+T*
+(   |  +------------------+) Tj
+T*
+(   |) Tj
+T*
+(   v) Tj
+T*
+(+------------------+) Tj
+T*
+(|  PROFILE SELECT  |) Tj
+T*
+(| profile 1..N     |) Tj
+T*
+(| < Back -> MAIN   |) Tj
+T*
+(+------------------+) Tj
+T*
+(   |) Tj
+T*
+(   v) Tj
+T*
+(+------------------+) Tj
+T*
+(|   WEIGHT INPUT   |) Tj
+T*
+(| [d][d].[d][d][d] |) Tj
+T*
+(| Start            |) Tj
+T*
+(| < Back->PROFILES |) Tj
+T*
+(+------------------+) Tj
+T*
+(   |        |) Tj
+T*
+(   |        +----------------------> \(powrot\)) Tj
+T*
+(   v) Tj
+T*
+(+------------------+) Tj
+T*
+(|    CHARGE MODE   |) Tj
+T*
+(| Wait Zero/...    |) Tj
+T*
+(| target, waga     |) Tj
+T*
+(| over/under/ok    |) Tj
+T*
+(| < Back -> MAIN   |) Tj
+T*
+(+------------------+) Tj
+T*
+() Tj
+T*
+(============================================================) Tj
+T*
+(4\) ENKODER - OBROT I KLIK) Tj
+T*
+(============================================================) Tj
+T*
+() Tj
+T*
+(GLOBALNIE \(wiekszosc ekranow menu\):) Tj
+ET
+endstream
+endobj
+6 0 obj
+<< /Length 2434 >>
+stream
+BT
+/F1 9 Tf
+1 0 0 1 36 806 Tm
+11 TL
+(- Obrot: zmienia fokus miedzy przyciskami.) Tj
+T*
+(- Klik: uruchamia aktualnie zaznaczony przycisk.) Tj
+T*
+() Tj
+T*
+(1\) MAIN MENU) Tj
+T*
+(   Obrot: Start <-> Cleanup <-> Wireless <-> Settings) Tj
+T*
+(   Klik:) Tj
+T*
+(   - Start    -> PROFILE SELECT) Tj
+T*
+(   - Cleanup  -> CLEANUP MODE) Tj
+T*
+(   - Wireless -> WIRELESS) Tj
+T*
+(   - Settings -> SETTINGS) Tj
+T*
+() Tj
+T*
+(2\) PROFILE SELECT) Tj
+T*
+(   Obrot: profil1..profilN.. <Back>) Tj
+T*
+(   Klik:) Tj
+T*
+(   - profilX -> WEIGHT INPUT) Tj
+T*
+(   - <Back>  -> MAIN MENU) Tj
+T*
+() Tj
+T*
+(3\) WEIGHT INPUT) Tj
+T*
+(   Obrot: [D0][D1][D2][D3][D4?] -> Start -> <Back> \(fokus po elementach\)) Tj
+T*
+(   Klik:) Tj
+T*
+(   - na cyfrze: zwieksza cyfre o +1 \(9->0\)) Tj
+T*
+(   - Start: -> CHARGE MODE) Tj
+T*
+(   - <Back>: -> PROFILE SELECT) Tj
+T*
+() Tj
+T*
+(4\) CHARGE MODE) Tj
+T*
+(   Obrot: praktycznie bez nawigacji \(jest tylko <Back>\)) Tj
+T*
+(   Klik:) Tj
+T*
+(   - <Back> -> MAIN MENU \(i wyjscie z charge mode\)) Tj
+T*
+() Tj
+T*
+(5\) CLEANUP MODE \(WYJATEK\)) Tj
+T*
+(   Obrot: NIE zmienia menu; bezposrednio reguluje predkosc cleanup \(0.0..10.0 rps\)) Tj
+T*
+(   Klik:) Tj
+T*
+(   - Stop -> MAIN MENU) Tj
+T*
+() Tj
+T*
+(6\) WIRELESS) Tj
+T*
+(   Obrot: fokus na <Back> \(jedyny przycisk\)) Tj
+T*
+(   Klik:) Tj
+T*
+(   - <Back> -> MAIN MENU) Tj
+T*
+() Tj
+T*
+(7\) SETTINGS) Tj
+T*
+(   Obrot: Scale <-> Profiles <-> Save NVS <-> Erase NVS <-> Version <-> Reboot <-> <Back>) Tj
+T*
+(   Klik:) Tj
+T*
+(   - Scale     -> SCALE SETTINGS) Tj
+T*
+(   - Profiles  -> PROFILE VIEW) Tj
+T*
+(   - Save NVS  -> akcja zapisu \(zostaje na ekranie\)) Tj
+T*
+(   - Erase NVS -> kasowanie + reboot) Tj
+T*
+(   - Version   -> VERSION) Tj
+T*
+(   - Reboot    -> reboot) Tj
+T*
+(   - <Back>    -> MAIN MENU) Tj
+T*
+() Tj
+T*
+(8\) SCALE SETTINGS) Tj
+T*
+(   Obrot: Set Driver <-> Set Baudrate <-> <Back>) Tj
+T*
+(   Klik:) Tj
+T*
+(   - Set Driver   -> SET DRIVER) Tj
+T*
+(   - Set Baudrate -> SET BAUDRATE) Tj
+T*
+(   - <Back>       -> SETTINGS) Tj
+T*
+() Tj
+T*
+(9\) SET DRIVER) Tj
+T*
+(   Obrot: po liscie driverow + <Back>) Tj
+T*
+(   Klik:) Tj
+T*
+(   - driverX -> zapis wyboru i powrot do SCALE SETTINGS) Tj
+T*
+(   - <Back>  -> SCALE SETTINGS) Tj
+T*
+() Tj
+T*
+(10\) SET BAUDRATE) Tj
+T*
+(    Obrot: 4800 <-> 9600 <-> 19200 <-> <Back>) Tj
+T*
+(    Klik:) Tj
+T*
+(    - baudX  -> zapis wyboru i powrot do SCALE SETTINGS) Tj
+T*
+(    - <Back> -> SCALE SETTINGS) Tj
+T*
+() Tj
+T*
+(11\) PROFILE VIEW) Tj
+ET
+endstream
+endobj
+7 0 obj
+<< /Length 237 >>
+stream
+BT
+/F1 9 Tf
+1 0 0 1 36 806 Tm
+11 TL
+(    Obrot: fokus na <Back>) Tj
+T*
+(    Klik:) Tj
+T*
+(    - <Back> -> SETTINGS) Tj
+T*
+() Tj
+T*
+(12\) VERSION) Tj
+T*
+(    Obrot: fokus na <Back>) Tj
+T*
+(    Klik:) Tj
+T*
+(    - <Back> -> SETTINGS) Tj
+ET
+endstream
+endobj
+8 0 obj
+<< /Type /Page /Parent 14 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 1 0 R >> >> /Contents 2 0 R >>
+endobj
+9 0 obj
+<< /Type /Page /Parent 14 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 1 0 R >> >> /Contents 3 0 R >>
+endobj
+10 0 obj
+<< /Type /Page /Parent 14 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 1 0 R >> >> /Contents 4 0 R >>
+endobj
+11 0 obj
+<< /Type /Page /Parent 14 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 1 0 R >> >> /Contents 5 0 R >>
+endobj
+12 0 obj
+<< /Type /Page /Parent 14 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 1 0 R >> >> /Contents 6 0 R >>
+endobj
+13 0 obj
+<< /Type /Page /Parent 14 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 1 0 R >> >> /Contents 7 0 R >>
+endobj
+14 0 obj
+<< /Type /Pages /Kids [8 0 R 9 0 R 10 0 R 11 0 R 12 0 R 13 0 R] /Count 6 >>
+endobj
+15 0 obj
+<< /Type /Catalog /Pages 14 0 R >>
+endobj
+xref
+0 16
+0000000000 65535 f 
+0000000009 00000 n 
+0000000104 00000 n 
+0000003030 00000 n 
+0000005655 00000 n 
+0000008905 00000 n 
+0000011834 00000 n 
+0000014320 00000 n 
+0000014608 00000 n 
+0000014735 00000 n 
+0000014862 00000 n 
+0000014990 00000 n 
+0000015118 00000 n 
+0000015246 00000 n 
+0000015374 00000 n 
+0000015466 00000 n 
+trailer
+<< /Size 16 /Root 15 0 R >>
+startxref
+15517
+%%EOF
