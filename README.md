@@ -128,6 +128,7 @@ Important current note:
 - During autotune, live flow model freezing/shadow merge is still planned and not finalized yet.
 
 Technical details:
+- `docs/README.md`
 - `docs/flow_model_plan.md`
 - `docs/flow_model_autotune_control_recommendations.md`
 
