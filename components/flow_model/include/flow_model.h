@@ -70,6 +70,15 @@ esp_err_t flow_model_load(uint8_t profile_idx);
 // Confidence query — true when enough bins have sufficient data
 bool flow_model_is_trusted(uint8_t profile_idx, uint8_t motor);
 
+// Freeze / shadow merge (for autotune isolation)
+// Freeze: copy live model to shadow; future analyze_and_update writes go to shadow.
+// Query functions (get_inertia, is_trusted, etc.) still read from the live model.
+void      flow_model_freeze(uint8_t profile_idx);
+// Unfreeze without merging: discard shadow, resume live writes. Use on cancel / error.
+void      flow_model_unfreeze(void);
+// Merge shadow into live and save to NVS; use after autotune acceptance.
+esp_err_t flow_model_shadow_merge(void);
+
 // Debug
 esp_err_t flow_model_get(uint8_t profile_idx, flow_model_t *out);
 

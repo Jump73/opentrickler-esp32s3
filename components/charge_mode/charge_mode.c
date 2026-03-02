@@ -377,8 +377,20 @@ static void do_wait_for_complete(void)
         float error = target - current_weight;
 
         // ── Stop condition: target reached ──
-        if (error < charge_mode_config.fine_stop_threshold) {
-            ESP_LOGI(TAG, "Target reached! weight=%.4f, error=%.4f", current_weight, error);
+        // When the flow model is trusted, use learned inertia to stop earlier so
+        // the powder settling after motor stop lands within fine_stop_threshold.
+        float fine_stop = charge_mode_config.fine_stop_threshold;
+        if (flow_model_is_trusted(profile_idx, MOTOR_FINE)) {
+            float inertia_gn = flow_model_get_inertia_overshoot(profile_idx, MOTOR_FINE);
+            if (inertia_gn > 0.0f) {
+                // Cap at half the trickle threshold to avoid stopping too early.
+                fine_stop = fminf(fine_stop + inertia_gn,
+                                  FINE_TRICKLE_THRESHOLD_GN * 0.5f);
+            }
+        }
+        if (error < fine_stop) {
+            ESP_LOGI(TAG, "Target reached! weight=%.4f, error=%.4f (fine_stop=%.4f)",
+                     current_weight, error, fine_stop);
             motor_set_speed(MOTOR_FINE, 0);
             motor_set_speed(MOTOR_COARSE, 0);
             break;

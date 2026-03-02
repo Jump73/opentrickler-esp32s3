@@ -46,6 +46,11 @@ typedef struct {
 static flow_recording_t s_recording;
 static flow_model_t     s_models[MAX_PROFILES];
 
+// Shadow model used during autotune freeze
+static bool           s_frozen         = false;
+static uint8_t        s_frozen_profile = 0xFF;
+static flow_model_t   s_model_shadow;
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -58,6 +63,11 @@ static flow_model_single_t *get_single_model(uint8_t profile_idx, uint8_t motor)
 {
     if (profile_idx >= MAX_PROFILES) return NULL;
     return (motor == 0) ? &s_models[profile_idx].coarse : &s_models[profile_idx].fine;
+}
+
+static flow_model_single_t *get_single_model_from(flow_model_t *base, uint8_t motor)
+{
+    return (motor == 0) ? &base->coarse : &base->fine;
 }
 
 static int find_nearest_bin(const float *bins, int n, float speed)
@@ -250,7 +260,10 @@ esp_err_t flow_model_analyze_and_update(uint8_t profile_idx)
 
     uint8_t motor = s_recording.motor;
     const float *bins = get_bins_for_motor(motor);
-    flow_model_single_t *model = get_single_model(profile_idx, motor);
+    flow_model_t *target = (s_frozen && s_frozen_profile == profile_idx)
+                           ? &s_model_shadow
+                           : &s_models[profile_idx];
+    flow_model_single_t *model = get_single_model_from(target, motor);
     if (!model) return ESP_ERR_INVALID_ARG;
 
     const flow_sample_t *s = s_recording.samples;
@@ -445,8 +458,8 @@ esp_err_t flow_model_analyze_and_update(uint8_t profile_idx)
         }
     }
 
-    // Save to NVS
-    if (bins_updated > 0) {
+    // Save to NVS (skip when frozen — shadow is not persisted to NVS)
+    if (bins_updated > 0 && !(s_frozen && s_frozen_profile == profile_idx)) {
         flow_model_save(profile_idx);
     }
 
@@ -560,4 +573,37 @@ esp_err_t flow_model_get(uint8_t profile_idx, flow_model_t *out)
     if (profile_idx >= MAX_PROFILES || !out) return ESP_ERR_INVALID_ARG;
     *out = s_models[profile_idx];
     return ESP_OK;
+}
+
+// ---------------------------------------------------------------------------
+// Freeze / shadow merge
+// ---------------------------------------------------------------------------
+
+void flow_model_freeze(uint8_t profile_idx)
+{
+    if (profile_idx >= MAX_PROFILES) return;
+    s_model_shadow   = s_models[profile_idx];   // copy live → shadow
+    s_frozen_profile = profile_idx;
+    s_frozen         = true;
+    ESP_LOGI(TAG, "Flow model frozen for profile %d", profile_idx);
+}
+
+void flow_model_unfreeze(void)
+{
+    if (!s_frozen) return;
+    s_frozen         = false;
+    s_frozen_profile = 0xFF;
+    ESP_LOGI(TAG, "Flow model unfrozen (shadow discarded)");
+}
+
+esp_err_t flow_model_shadow_merge(void)
+{
+    if (!s_frozen || s_frozen_profile >= MAX_PROFILES) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    s_models[s_frozen_profile] = s_model_shadow;    // apply shadow → live
+    esp_err_t ret = flow_model_save(s_frozen_profile);
+    ESP_LOGI(TAG, "Flow model shadow merged into profile %d", s_frozen_profile);
+    flow_model_unfreeze();
+    return ret;
 }

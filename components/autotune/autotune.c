@@ -743,9 +743,11 @@ static void cd_generate_candidate(float *kp, float *kd,
             *kd = s_cd.best_kd;
             break;
         case CD_STEP_KP_POS:
-            if (fmaxf(0.0f, s_cd.best_overshoot) > 0.0f) {
-                // Best already overshoots: higher Kp only makes it worse.
-                // Fake KP_POS as terrible so KP_NEG wins, skip directly to KP_NEG.
+            if (fmaxf(0.0f, s_cd.best_overshoot) > AUTOTUNE_OVERSHOOT_GUARD_GN) {
+                // Best overshoots by more than the guard: skip KP_POS to avoid
+                // wasting a run on a direction that will likely make it worse.
+                // Small positive values (< guard, e.g. 1 scale tick) are treated as
+                // noise — both directions are still explored in that case.
                 s_cd.pos_abs_werr  = 1e9f;
                 s_cd.pos_abs_terr  = 1e9f;
                 s_cd.pos_overshoot = 1e9f;
@@ -1579,6 +1581,10 @@ static void autotune_task(void *arg)
     trials_reset();
     telemetry_reset();
 
+    // Freeze flow model for this profile — autotune writes go to shadow to
+    // prevent exploratory trial runs from polluting the live model.
+    flow_model_freeze(profile_get_selected_idx());
+
     autotune_lock();
     s_status.runs_total = s_request.max_runs_per_stage * 2;
     s_status.runs_done = 0;
@@ -1602,6 +1608,7 @@ static void autotune_task(void *arg)
         }
     }
     if (!coarse_ok) {
+        flow_model_unfreeze();
         autotune_finish_error("COARSE did not reach tolerance within run limit");
         s_task_handle = NULL;
         vTaskDelete(NULL);
@@ -1620,6 +1627,7 @@ static void autotune_task(void *arg)
                          &best_fine_kd,
                          &best_fine_werr,
                          &best_fine_terr)) {
+        flow_model_unfreeze();
         autotune_finish_error("FINE did not reach tolerance within run limit");
         s_task_handle = NULL;
         vTaskDelete(NULL);
@@ -1646,6 +1654,8 @@ static void autotune_task(void *arg)
     s_status.message[sizeof(s_status.message) - 1] = '\0';
     autotune_unlock();
 
+    // Merge shadow model into live: apply learning from accepted autotune trials.
+    flow_model_shadow_merge();
     stop_all();
     s_task_handle = NULL;
     vTaskDelete(NULL);
@@ -1757,6 +1767,7 @@ esp_err_t autotune_cancel(void)
     autotune_unlock();
 
     stop_all();
+    flow_model_unfreeze();
     return ESP_OK;
 }
 

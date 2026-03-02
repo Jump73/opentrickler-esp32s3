@@ -30,16 +30,23 @@ Current use:
 - Charge mode: records and analyzes both motor phases.
 - Autotune: records and analyzes trial runs.
 
+## Implemented (updated 2026-03-02)
+
+4. Live-model freeze during autotune
+- `flow_model_freeze(profile_idx)`: copies live model to shadow; future `analyze_and_update` writes go to shadow only.
+- `flow_model_unfreeze()`: discards shadow, resumes live writes. Called on autotune cancel or error.
+- `flow_model_shadow_merge()`: copies shadow → live, saves to NVS, then unfreezes. Called after autotune acceptance.
+- Autotune task calls freeze at start, merge on success, unfreeze on error/cancel.
+
+5. Predictive fine cutoff in charge mode (behind trust gate)
+- When `flow_model_is_trusted(profile_idx, MOTOR_FINE)` is true, `inertia_overshoot_gn` is added to `fine_stop_threshold`.
+- Cap applied: `min(fine_stop + inertia, FINE_TRICKLE_THRESHOLD_GN * 0.5)`.
+- Falls back to configured threshold when model is not trusted or inertia is zero.
+- Post-settle classification still uses the configured (not dynamic) threshold.
+
 ## Not implemented yet
 
-1. Live-model freeze during autotune
-- `flow_model_freeze/unfreeze/shadow-merge` API is not present yet.
-
-2. Predictive stop/cutoff in charge mode
-- Current charge-mode stop checks use configured thresholds.
-- Dynamic stop-threshold from flow model is not active.
-
-3. Full feedforward replacement strategy
+1. Full feedforward replacement strategy
 - Model query helpers exist, but production control remains PD-dominant.
 
 ## Current control notes
