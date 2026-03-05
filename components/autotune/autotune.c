@@ -1025,7 +1025,7 @@ static bool tune_coarse_stage(profile_t *profile,
         s_status.last_elapsed_s = elapsed_s;
         autotune_unlock();
 
-        float werr = roundf((final_w - s_request.coarse_target_weight) * 1000.0f) / 1000.0f;
+        float werr = roundf((final_w - s_request.coarse_target_weight) / 0.020f) * 0.020f;
         float abs_werr = fabsf(werr);
         // Coarse time: one-sided vs total budget (being fast is always ok; slow is excess)
         float es_terr = fmaxf(0.0f, elapsed_s - s_request.total_target_time_s);
@@ -1344,7 +1344,7 @@ static bool tune_fine_stage(profile_t *profile,
         s_status.last_elapsed_s = total_elapsed;
         autotune_unlock();
 
-        float werr = roundf((final_w - s_request.fine_target_weight) * 1000.0f) / 1000.0f;
+        float werr = roundf((final_w - s_request.fine_target_weight) / 0.020f) * 0.020f;
         float abs_werr = fabsf(werr);
         // Total cycle time vs target: negative = under (always ok), positive = over budget
         float terr = total_elapsed - s_request.total_target_time_s;
