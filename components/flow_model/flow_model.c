@@ -571,7 +571,13 @@ bool flow_model_is_trusted(uint8_t profile_idx, uint8_t motor)
 esp_err_t flow_model_get(uint8_t profile_idx, flow_model_t *out)
 {
     if (profile_idx >= MAX_PROFILES || !out) return ESP_ERR_INVALID_ARG;
-    *out = s_models[profile_idx];
+    // Return shadow when frozen so callers (e.g. autotune quality gate) see the
+    // model as it evolves during the current autotune session, not the stale
+    // live snapshot that was taken at freeze time.
+    if (s_frozen && s_frozen_profile == profile_idx)
+        *out = s_model_shadow;
+    else
+        *out = s_models[profile_idx];
     return ESP_OK;
 }
 
