@@ -31,8 +31,7 @@ typedef enum {
 } autotune_substatus_t;
 
 typedef struct {
-    float coarse_target_weight;
-    float fine_target_weight;
+    float target_weight;        // final target weight (gn); coarse stops at target_weight - coarse_stop_threshold
     float total_target_time_s;  // target for full coarse+fine cycle; being under is always ok
 
     int max_runs_per_stage;

@@ -396,7 +396,7 @@ static bool run_single_motor_dispense(motor_type_t motor,
     // Dynamic stop_threshold is applied in charge_mode (normal operation) only.
     const float stop_threshold = (motor == MOTOR_FINE)
         ? (s_request.fine_stop_threshold   > 0.001f ? s_request.fine_stop_threshold   : 0.02f)
-        : (s_request.coarse_stop_threshold > 0.001f ? s_request.coarse_stop_threshold : 0.03f);
+        : (s_request.coarse_stop_threshold > 0.001f ? s_request.coarse_stop_threshold : 0.5f);
 
     float last_error = target_weight;
     float peak_weight = 0.0f;  // track max weight during dispensing
@@ -535,14 +535,6 @@ static bool run_fine_stage_with_coarse_prefill(float coarse_kp,
                                                float *fine_overshoot,
                                                float *coarse_elapsed_out)
 {
-    if (s_request.coarse_target_weight >=
-        (s_request.fine_target_weight - AUTOTUNE_STAGE_TARGET_MIN_GAP_GN)) {
-        ESP_LOGE(TAG, "Invalid targets for coarse+fine: coarse=%.3f fine=%.3f (need coarse < fine by >= %.3f)",
-                 s_request.coarse_target_weight, s_request.fine_target_weight,
-                 AUTOTUNE_STAGE_TARGET_MIN_GAP_GN);
-        return false;
-    }
-
     profile_t *profile = profile_get_selected();
     if (!profile) {
         return false;
@@ -564,7 +556,7 @@ static bool run_fine_stage_with_coarse_prefill(float coarse_kp,
     bool coarse_ok = run_single_motor_dispense(MOTOR_COARSE,
                                                coarse_kp,
                                                coarse_kd,
-                                               s_request.coarse_target_weight,
+                                               s_request.target_weight - s_request.coarse_stop_threshold,
                                                s_request.total_target_time_s + 15.0f,
                                                coarse_min,
                                                coarse_max,
@@ -586,7 +578,7 @@ static bool run_fine_stage_with_coarse_prefill(float coarse_kp,
     bool fine_ok = run_single_motor_dispense(MOTOR_FINE,
                                              fine_kp,
                                              fine_kd,
-                                             s_request.fine_target_weight,
+                                             s_request.target_weight,
                                              s_request.total_target_time_s + 15.0f,
                                              fine_min,
                                              fine_max,
@@ -744,19 +736,19 @@ static void cd_generate_candidate(float *kp, float *kd,
             break;
         case CD_STEP_KP_POS:
             if (fmaxf(0.0f, s_cd.best_overshoot) > AUTOTUNE_OVERSHOOT_GUARD_GN) {
-                // Best overshoots by more than the guard: skip KP_POS to avoid
-                // wasting a run on a direction that will likely make it worse.
-                // Small positive values (< guard, e.g. 1 scale tick) are treated as
-                // noise — both directions are still explored in that case.
-                s_cd.pos_abs_werr  = 1e9f;
-                s_cd.pos_abs_terr  = 1e9f;
-                s_cd.pos_overshoot = 1e9f;
+                // Overshoot present: try increasing Kd first to damp it before adjusting Kp.
+                // Higher Kd may tame the overshoot while keeping Kp (speed) intact.
+                s_cd.pos_abs_werr  = s_cd.best_abs_werr;
+                s_cd.pos_abs_terr  = s_cd.best_abs_terr;
+                s_cd.pos_overshoot = s_cd.best_overshoot;
                 s_cd.pos_kp        = s_cd.best_kp;
                 s_cd.pos_kd        = s_cd.best_kd;
-                s_cd.step          = CD_STEP_KP_NEG;
-                *kp = clampf(s_cd.best_kp * expf(-s_cd.delta_kp), kp_min, kp_max);
-                *kd = s_cd.best_kd;
-                ESP_LOGI(TAG, "CD: KP_POS skipped (best overshoots), testing KP_NEG directly");
+                s_cd.step          = CD_STEP_KD_POS;
+                *kp = s_cd.best_kp;
+                *kd = clampf(s_cd.best_kd * expf(+s_cd.delta_kd), kd_min, kd_max);
+                s_cd.pos_kp = *kp;
+                s_cd.pos_kd = *kd;
+                ESP_LOGI(TAG, "CD: overshoot present, testing KD+ first to damp (kd=%.5f)", *kd);
             } else {
                 *kp = clampf(s_cd.best_kp * expf(+s_cd.delta_kp), kp_min, kp_max);
                 *kd = s_cd.best_kd;
@@ -847,14 +839,6 @@ static bool cd_update(float kp, float kd,
         }
 
         case CD_STEP_KD_POS:
-            if (overshoot_guard_active) {
-                // Overshoot-first policy: when overshoot is still above guard,
-                // prioritize Kp shaping and postpone Kd search.
-                s_cd.delta_kd = fmaxf(s_cd.delta_kd * 0.85f, 0.05f);
-                s_cd.step = CD_STEP_KP_POS;
-                ESP_LOGI(TAG, "CD: overshoot guard active (os=%.4f) - postponing Kd search", s_cd.best_overshoot);
-                break;
-            }
             s_cd.pos_abs_werr  = abs_werr;
             s_cd.pos_abs_terr  = abs_terr;
             s_cd.pos_overshoot = overshoot;
@@ -1011,7 +995,7 @@ static bool tune_coarse_stage(profile_t *profile,
         float overshoot = 0.0f;
         bool ok = run_single_motor_dispense(MOTOR_COARSE,
                                             kp, kd,
-                                            s_request.coarse_target_weight,
+                                            s_request.target_weight - s_request.coarse_stop_threshold,
                                             s_request.total_target_time_s + 15.0f,
                                             min_speed, max_speed,
                                             5000,
@@ -1025,7 +1009,7 @@ static bool tune_coarse_stage(profile_t *profile,
         s_status.last_elapsed_s = elapsed_s;
         autotune_unlock();
 
-        float werr = roundf((final_w - s_request.coarse_target_weight) * 1000.0f) / 1000.0f;
+        float werr = roundf((final_w - (s_request.target_weight - s_request.coarse_stop_threshold)) * 1000.0f) / 1000.0f;
         float abs_werr = fabsf(werr);
         // Coarse time: one-sided vs total budget (being fast is always ok; slow is excess)
         float es_terr = fmaxf(0.0f, elapsed_s - s_request.total_target_time_s);
@@ -1078,7 +1062,9 @@ static bool tune_coarse_stage(profile_t *profile,
         float quality_floor = fmaxf(AUTOTUNE_MIN_ACCEPT_QUALITY, telemetry_recent_quality_mean(AUTOTUNE_STAGE_COARSE, 8) * 0.70f);
         bool weight_ok = (abs_werr <= s_request.coarse_weight_tolerance) &&
                          (positive_overshoot <= s_request.coarse_weight_tolerance);
-        bool accepted = weight_ok && (run_quality >= quality_floor);
+        // Quality gate removed from SEARCH: CONFIRM phase already verifies reproducibility.
+        // A weight_ok result is accepted regardless of flow model quality.
+        bool accepted = weight_ok;
         // For CONFIRM/SPEED_PROBE only weight accuracy matters (quality already checked in SEARCH).
         bool effective_accepted = (phase == COARSE_PHASE_SEARCH) ? accepted : weight_ok;
         ESP_LOGI(TAG, "COARSE quality: q=%.2f floor=%.2f weight_ok=%d quality_ok=%d accepted=%d (phase=%d)",
@@ -1211,7 +1197,10 @@ static bool tune_coarse_stage(profile_t *profile,
         }
 
         speed_probe_idx++;
-        if (speed_probe_idx >= AUTOTUNE_SPEED_PROBE_ATTEMPTS) {
+        // If overshoot clearly exceeds tolerance, higher Kp will only make it worse — stop early.
+        // Small epsilon avoids false trigger from float rounding (e.g. 0.020 > 0.020).
+        bool overshoot_growing = (positive_overshoot > s_request.coarse_weight_tolerance + 0.001f);
+        if (overshoot_growing || speed_probe_idx >= AUTOTUNE_SPEED_PROBE_ATTEMPTS) {
             // Could not find a faster setup with same precision. Keep stable setup.
             tolerance_reached = true;
             if (confirmed_ready) {
@@ -1225,7 +1214,10 @@ static bool tune_coarse_stage(profile_t *profile,
                 *best_abs_werr = stable_abs_werr;
                 *best_abs_terr = stable_time_s;
             }
-            ESP_LOGI(TAG, "COARSE final stable setup kept (no faster precise variant)");
+            if (overshoot_growing)
+                ESP_LOGI(TAG, "COARSE speed probe stopped early: overshoot %.3f > tolerance %.3f", positive_overshoot, s_request.coarse_weight_tolerance);
+            else
+                ESP_LOGI(TAG, "COARSE final stable setup kept (no faster precise variant)");
             break;
         }
 
@@ -1344,7 +1336,7 @@ static bool tune_fine_stage(profile_t *profile,
         s_status.last_elapsed_s = total_elapsed;
         autotune_unlock();
 
-        float werr = roundf((final_w - s_request.fine_target_weight) * 1000.0f) / 1000.0f;
+        float werr = roundf((final_w - s_request.target_weight) * 1000.0f) / 1000.0f;
         float abs_werr = fabsf(werr);
         // Total cycle time vs target: negative = under (always ok), positive = over budget
         float terr = total_elapsed - s_request.total_target_time_s;
@@ -1393,7 +1385,9 @@ static bool tune_fine_stage(profile_t *profile,
         float quality_floor = fmaxf(AUTOTUNE_MIN_ACCEPT_QUALITY, telemetry_recent_quality_mean(AUTOTUNE_STAGE_FINE, 8) * 0.70f);
         bool weight_ok = (abs_werr <= s_request.fine_weight_tolerance) &&
                          (positive_overshoot <= s_request.fine_weight_tolerance);
-        bool accepted = weight_ok && (run_quality >= quality_floor);
+        // Quality gate removed from SEARCH: CONFIRM phase already verifies reproducibility.
+        // A weight_ok result is accepted regardless of flow model quality.
+        bool accepted = weight_ok;
         // For CONFIRM/SPEED_PROBE only weight accuracy matters (quality already checked in SEARCH).
         bool effective_accepted = (phase == FINE_PHASE_SEARCH) ? accepted : weight_ok;
         ESP_LOGI(TAG, "FINE quality: q=%.2f floor=%.2f weight_ok=%d quality_ok=%d accepted=%d (phase=%d)",
@@ -1538,7 +1532,10 @@ static bool tune_fine_stage(profile_t *profile,
         }
 
         speed_probe_idx++;
-        if (speed_probe_idx >= AUTOTUNE_SPEED_PROBE_ATTEMPTS) {
+        // If overshoot clearly exceeds tolerance, higher Kp will only make it worse — stop early.
+        // Small epsilon avoids false trigger from float rounding (e.g. 0.020 > 0.020).
+        bool overshoot_growing = (positive_overshoot > s_request.fine_weight_tolerance + 0.001f);
+        if (overshoot_growing || speed_probe_idx >= AUTOTUNE_SPEED_PROBE_ATTEMPTS) {
             tolerance_reached = true;
             if (confirmed_ready) {
                 *best_kp = confirmed_kp;
@@ -1551,7 +1548,10 @@ static bool tune_fine_stage(profile_t *profile,
                 *best_abs_werr = stable_abs_werr;
                 *best_abs_terr = fabsf(stable_total_time_s - s_request.total_target_time_s);
             }
-            ESP_LOGI(TAG, "FINE final stable setup kept (no faster precise variant)");
+            if (overshoot_growing)
+                ESP_LOGI(TAG, "FINE speed probe stopped early: overshoot %.3f > tolerance %.3f", positive_overshoot, s_request.fine_weight_tolerance);
+            else
+                ESP_LOGI(TAG, "FINE final stable setup kept (no faster precise variant)");
             break;
         }
 
@@ -1694,19 +1694,12 @@ esp_err_t autotune_start(const autotune_request_t *request)
         return ESP_ERR_INVALID_STATE;
     }
 
-    if (request->coarse_target_weight <= 0.01f ||
-        request->fine_target_weight <= 0.01f ||
+    if (request->target_weight <= 0.01f ||
         request->total_target_time_s <= 0.1f ||
         request->max_runs_per_stage < 1 ||
         request->coarse_weight_tolerance <= 0.0f ||
         request->fine_weight_tolerance <= 0.0f ||
         request->time_tolerance_s <= 0.0f) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    // Fine stage must always target a higher weight than coarse prefill.
-    if (request->coarse_target_weight >=
-        (request->fine_target_weight - AUTOTUNE_STAGE_TARGET_MIN_GAP_GN)) {
         return ESP_ERR_INVALID_ARG;
     }
 

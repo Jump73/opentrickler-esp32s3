@@ -45,6 +45,7 @@ typedef struct {
     // Thresholds and margins
     float coarse_stop_threshold;
     float fine_stop_threshold;
+    float fine_trickle_threshold;
     float set_point_sd_margin;
     float set_point_mean_margin;
 

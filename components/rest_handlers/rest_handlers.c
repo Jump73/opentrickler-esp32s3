@@ -529,7 +529,7 @@ char* rest_charge_mode_config_handler(int num_params, char *params[], char *valu
     if (num_params == 0) {
         snprintf(charge_mode_config_json_buffer, sizeof(charge_mode_config_json_buffer),
                  "{\"c1\":\"#%06lx\",\"c2\":\"#%06lx\",\"c3\":\"#%06lx\",\"c4\":\"#%06lx\","
-                 "\"c5\":%.3f,\"c6\":%.3f,\"c7\":%.3f,\"c8\":%.3f,\"c9\":%d,\"c10\":%s,\"c11\":%lu,\"c12\":%.3f}",
+                 "\"c5\":%.3f,\"c6\":%.3f,\"c7\":%.3f,\"c8\":%.3f,\"c9\":%d,\"c10\":%s,\"c11\":%lu,\"c12\":%.3f,\"c13\":%.3f}",
                  config.neopixel_normal_charge_colour,
                  config.neopixel_under_charge_colour,
                  config.neopixel_over_charge_colour,
@@ -541,7 +541,8 @@ char* rest_charge_mode_config_handler(int num_params, char *params[], char *valu
                  (int)config.decimal_places,
                  boolean_to_string(config.precharge_enable),
                  config.precharge_time_ms,
-                 config.precharge_speed_rps);
+                 config.precharge_speed_rps,
+                 config.fine_trickle_threshold);
         return charge_mode_config_json_buffer;
     }
 
@@ -601,6 +602,10 @@ char* rest_charge_mode_config_handler(int num_params, char *params[], char *valu
         }
         else if (strcmp(params[idx], "c12") == 0) {
             config.precharge_speed_rps = strtof(values[idx], NULL);
+            config_changed = true;
+        }
+        else if (strcmp(params[idx], "c13") == 0) {
+            config.fine_trickle_threshold = strtof(values[idx], NULL);
             config_changed = true;
         }
         // Save to NVS
@@ -913,15 +918,14 @@ char* rest_autotune_coarse_handler(int num_params, char *params[], char *values[
     bool finish_now = false;
 
     autotune_request_t request = {
-        .coarse_target_weight = 37.0f,
-        .fine_target_weight = 40.0f,
+        .target_weight = 40.0f,
         .total_target_time_s = 20.0f,
         .max_runs_per_stage = 15,
-        .coarse_weight_tolerance = 1.0f,
+        .coarse_weight_tolerance = 0.5f,
         .fine_weight_tolerance = 0.02f,
         .time_tolerance_s = 2.0f,
         .fine_stop_threshold = 0.02f,
-        .coarse_stop_threshold = 0.03f,
+        .coarse_stop_threshold = 3.0f,
         .auto_apply = true,
         .save_to_nvs = false,
     };
@@ -930,14 +934,11 @@ char* rest_autotune_coarse_handler(int num_params, char *params[], char *values[
         if (strcmp(params[idx], "a0") == 0) {
             start = string_to_boolean(values[idx]);
         }
-        else if (strcmp(params[idx], "a1") == 0) {
-            request.coarse_target_weight = strtof(values[idx], NULL);
-        }
         else if (strcmp(params[idx], "a2") == 0) {
             request.total_target_time_s = strtof(values[idx], NULL);
         }
         else if (strcmp(params[idx], "a3") == 0) {
-            request.fine_target_weight = strtof(values[idx], NULL);
+            request.target_weight = strtof(values[idx], NULL);
         }
         else if (strcmp(params[idx], "a5") == 0) {
             request.max_runs_per_stage = atoi(values[idx]);

@@ -99,6 +99,7 @@ static charge_mode_config_t charge_mode_config = {
 
     .coarse_stop_threshold = 5.0f,      // Original default: 5 grains
     .fine_stop_threshold = 0.03f,        // Original default: 0.03 grains
+    .fine_trickle_threshold = 0.3f,
     .set_point_sd_margin = 0.02f,
     .set_point_mean_margin = 0.02f,
 
@@ -377,15 +378,16 @@ static void do_wait_for_complete(void)
         float error = target - current_weight;
 
         // ── Stop condition: target reached ──
-        // When the flow model is trusted, use learned inertia to stop earlier so
-        // the powder settling after motor stop lands within fine_stop_threshold.
+        // In trickle mode the motor runs at minimum speed so in-flight inertia is
+        // negligible — use the configured threshold directly.
+        // Outside trickle (fast approach), apply learned inertia to stop earlier.
         float fine_stop = charge_mode_config.fine_stop_threshold;
-        if (flow_model_is_trusted(profile_idx, MOTOR_FINE)) {
+        if (!fine_trickle && flow_model_is_trusted(profile_idx, MOTOR_FINE)) {
             float inertia_gn = flow_model_get_inertia_overshoot(profile_idx, MOTOR_FINE);
             if (inertia_gn > 0.0f) {
                 // Cap at half the trickle threshold to avoid stopping too early.
                 fine_stop = fminf(fine_stop + inertia_gn,
-                                  FINE_TRICKLE_THRESHOLD_GN * 0.5f);
+                                  charge_mode_config.fine_trickle_threshold * 0.5f);
             }
         }
         if (error < fine_stop) {
@@ -447,7 +449,7 @@ static void do_wait_for_complete(void)
             // Enter trickle mode when within FINE_TRICKLE_THRESHOLD_GN of target.
             // Motor crawls at minimum flow speed; scale is read after each 200ms
             // interval so we stop before inertia can cause overshoot.
-            if (!fine_trickle && error <= FINE_TRICKLE_THRESHOLD_GN) {
+            if (!fine_trickle && error <= charge_mode_config.fine_trickle_threshold) {
                 fine_trickle = true;
                 ESP_LOGI(TAG, "Fine: trickle mode at %.4f gn (err=%.4f)", current_weight, error);
             }

@@ -256,16 +256,12 @@
 
                     <div class="grid grid-cols-2 gap-x-2 gap-y-1">
                         <div>
-                            <span class="label-text text-xs">Coarse Target Weight (gn)</span>
-                            <input id="atParamA1" type="number" class="input input-bordered input-sm w-full" step="0.1" value="37.0">
+                            <span class="label-text text-xs">Target Weight (gn)</span>
+                            <input id="atParamA3" type="number" class="input input-bordered input-sm w-full" step="0.1" value="40.0">
                         </div>
                         <div>
                             <span class="label-text text-xs">Total Cycle Time Target (s)</span>
                             <input id="atParamA2" type="number" class="input input-bordered input-sm w-full" step="0.1" value="20.0">
-                        </div>
-                        <div>
-                            <span class="label-text text-xs">Fine Target Weight (gn)</span>
-                            <input id="atParamA3" type="number" class="input input-bordered input-sm w-full" step="0.1" value="40.0">
                         </div>
                         <div>
                             <span class="label-text text-xs">Max Runs per Stage</span>
@@ -273,7 +269,7 @@
                         </div>
                         <div>
                             <span class="label-text text-xs">Coarse Wt Tolerance (gn)</span>
-                            <input id="atParamA6" type="number" class="input input-bordered input-sm w-full" step="0.001" value="1.00">
+                            <input id="atParamA6" type="number" class="input input-bordered input-sm w-full" step="0.05" value="0.5">
                         </div>
                         <div>
                             <span class="label-text text-xs">Fine Wt Tolerance (gn)</span>
@@ -289,7 +285,7 @@
                         </div>
                         <div>
                             <span class="label-text text-xs">Coarse Stop Threshold (gn)</span>
-                            <input id="atParamA11" type="number" class="input input-bordered input-sm w-full" step="0.005" value="0.03">
+                            <input id="atParamA11" type="number" class="input input-bordered input-sm w-full" step="0.5" value="3.0">
                         </div>
                     </div>
 
@@ -536,6 +532,11 @@
                             <div class="grid grid-cols-1 gap-1">
                                 <span class="label-text">Pre-Charge Speed (rps)</span>
                                 <input type="number" class="input input-bordered" name="c12" step="0.001">
+                            </div>
+
+                            <div class="grid grid-cols-1 gap-1">
+                                <span class="label-text">Fine Trickle Mode Threshold (gn)</span>
+                                <input type="number" class="input input-bordered" name="c13" step="0.05">
                             </div>
 
                             <button class="btn btn-neutral settings-apply-btn">Apply</button>
@@ -2124,7 +2125,6 @@
         fetch(switchUri)
         .then(response => response.json())
         .then(() => {
-            const a1 = document.getElementById("atParamA1").value;
             const a2 = document.getElementById("atParamA2").value;
             const a3 = document.getElementById("atParamA3").value;
             const a5 = document.getElementById("atParamA5").value;
@@ -2134,7 +2134,7 @@
             const a10 = document.getElementById("atParamA10").value;
             const a11 = document.getElementById("atParamA11").value;
 
-            const uri = `/rest/autotune_coarse?a0=true&a1=${encodeURIComponent(a1)}&a2=${encodeURIComponent(a2)}&a3=${encodeURIComponent(a3)}&a5=${encodeURIComponent(a5)}&a6=${encodeURIComponent(a6)}&a9=${encodeURIComponent(a9)}&a7=${encodeURIComponent(a7)}&a10=${encodeURIComponent(a10)}&a11=${encodeURIComponent(a11)}&a8=false&ee=false`;
+            const uri = `/rest/autotune_coarse?a0=true&a2=${encodeURIComponent(a2)}&a3=${encodeURIComponent(a3)}&a5=${encodeURIComponent(a5)}&a6=${encodeURIComponent(a6)}&a9=${encodeURIComponent(a9)}&a7=${encodeURIComponent(a7)}&a10=${encodeURIComponent(a10)}&a11=${encodeURIComponent(a11)}&a8=false&ee=false`;
 
             return fetch(uri);
         })
@@ -2380,11 +2380,11 @@
                 var kp = data["active_kp"] || 0;
                 var kd = data["active_kd"] || 0;
                 var stg = stage;
-                // Target from form inputs
-                var tgt = (stg === 1)
-                    ? parseFloat(document.getElementById("atParamA1").value) || 0
-                    : parseFloat(document.getElementById("atParamA3").value) || 0;
-                var we = lastW - tgt;
+                // Target from form inputs (coarse targets target_weight - coarse_stop_threshold)
+                var tgt = parseFloat(document.getElementById("atParamA3").value) || 0;
+                var coarseStop = parseFloat(document.getElementById("atParamA11").value) || 0;
+                var stageTgt = (stg === 1) ? (tgt - coarseStop) : tgt;
+                var we = lastW - stageTgt;
                 _atTrials.push({n: runsDone, stage: stg, kp: kp, kd: kd, sw: lastW, we: we, time: lastT});
                 _renderAtTrials();
             }
