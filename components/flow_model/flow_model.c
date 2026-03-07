@@ -144,6 +144,26 @@ esp_err_t flow_model_save(uint8_t profile_idx)
     return ret;
 }
 
+esp_err_t flow_model_reset(uint8_t profile_idx)
+{
+    if (profile_idx >= MAX_PROFILES) return ESP_ERR_INVALID_ARG;
+
+    init_model_bins(&s_models[profile_idx].coarse, coarse_bins);
+    init_model_bins(&s_models[profile_idx].fine, fine_bins);
+    s_models[profile_idx].coarse.transport_delay_ms   = 0.0f;
+    s_models[profile_idx].coarse.inertia_factor_s     = 0.0f;
+    s_models[profile_idx].coarse.inertia_overshoot_gn = 0.0f;
+    s_models[profile_idx].coarse.last_quality         = 0.0f;
+    s_models[profile_idx].fine.transport_delay_ms     = 0.0f;
+    s_models[profile_idx].fine.inertia_factor_s       = 0.0f;
+    s_models[profile_idx].fine.inertia_overshoot_gn   = 0.0f;
+    s_models[profile_idx].fine.last_quality           = 0.0f;
+    s_models[profile_idx].version = FLOW_MODEL_VERSION;
+
+    ESP_LOGI(TAG, "Flow model reset for profile %d", profile_idx);
+    return flow_model_save(profile_idx);
+}
+
 esp_err_t flow_model_load(uint8_t profile_idx)
 {
     if (profile_idx >= MAX_PROFILES) return ESP_ERR_INVALID_ARG;

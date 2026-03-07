@@ -477,6 +477,7 @@ static void do_wait_for_complete(void)
     // partial/invalid result from the interrupted cycle.
     if (exit_requested()) {
         flow_model_record_stop();
+        stop_all_motors();
         ESP_LOGI(TAG, "Charge interrupted: skip settle/post-settle result classification");
         return;
     }
@@ -502,6 +503,7 @@ static void do_wait_for_complete(void)
 
         while (1) {
             if (exit_requested()) {
+                stop_all_motors();
                 ESP_LOGI(TAG, "Charge interrupted during settle: skip result classification");
                 return;
             }

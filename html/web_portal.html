@@ -454,6 +454,15 @@
 
                             <button class="btn btn-neutral settings-apply-btn">Apply</button>
                         </form>
+
+                        <div class="divider">Flow Model</div>
+                        <div class="grid grid-cols-1 gap-2">
+                            <div id="flowModelStatus" class="text-sm font-mono bg-base-200 rounded p-2">—</div>
+                            <div class="grid grid-cols-2 gap-2">
+                                <button class="btn btn-sm btn-neutral" onclick="onFlowModelRefreshClicked()">Refresh</button>
+                                <button class="btn btn-sm btn-error" onclick="onFlowModelResetClicked()">Reset Flow Model</button>
+                            </div>
+                        </div>
                     </section>
 
                     <!-- Charge Mode Settings -->
@@ -2395,6 +2404,30 @@
             clearTimeout(autotunePollTimeoutId);
             autotunePollTimeoutId = setTimeout(pollAutotuneStatus, 1000);
         });
+    }
+
+    function onFlowModelRefreshClicked() {
+        const profileIdx = document.getElementById("select_profile_option").value;
+        fetch(`/rest/flow_model?pf=${encodeURIComponent(profileIdx)}`)
+        .then(r => r.json())
+        .then(data => {
+            document.getElementById("flowModelStatus").textContent =
+                `Fine: trusted=${data.fine_trusted}, overshoot=${parseFloat(data.fine_overshoot).toFixed(4)} gn, delay=${parseFloat(data.fine_delay).toFixed(0)} ms`;
+        })
+        .catch(() => { document.getElementById("flowModelStatus").textContent = "Error fetching status"; });
+    }
+
+    function onFlowModelResetClicked() {
+        if (!confirm("Reset flow model for this profile? All learned data will be lost.")) return;
+        const profileIdx = document.getElementById("select_profile_option").value;
+        fetch(`/rest/flow_model?pf=${encodeURIComponent(profileIdx)}&reset=1`)
+        .then(r => r.json())
+        .then(data => {
+            document.getElementById("flowModelStatus").textContent =
+                `Reset OK — Fine: trusted=${data.fine_trusted}, overshoot=${parseFloat(data.fine_overshoot).toFixed(4)} gn`;
+            document.getElementById("settingsAppliedSuccessDialog").showModal();
+        })
+        .catch(() => { document.getElementById("flowModelStatus").textContent = "Error during reset"; });
     }
 
     // Start the long polling process when the page loads

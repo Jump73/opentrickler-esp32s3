@@ -72,6 +72,15 @@ char* rest_cleanup_mode_state_handler(int num_params, char *params[], char *valu
 //                          l5=pwm_out_colour_order(int), ee=save
 char* rest_neopixel_led_config_handler(int num_params, char *params[], char *values[]);
 
+// Mini 12864 module configuration endpoint
+// Parameters: b0=inverted_encoder(bool), b1=display_rotation(0 or 2), ee=save
+char* rest_mini_12864_config_handler(int num_params, char *params[], char *values[]);
+
+// Flow model endpoint
+// GET /rest/flow_model[?pf=<idx>]           — returns model summary for profile
+// GET /rest/flow_model?pf=<idx>&reset=1     — resets model for profile to factory defaults
+char* rest_flow_model_handler(int num_params, char *params[], char *values[]);
+
 // Helper: Parse boolean from string ("true"/"false" or "1"/"0")
 bool string_to_boolean(const char *str);
 

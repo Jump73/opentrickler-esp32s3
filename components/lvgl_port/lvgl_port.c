@@ -5,9 +5,21 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
+#include "nvs_flash.h"
+#include "nvs.h"
 #include <string.h>
 
 static const char *TAG = "LVGL_PORT";
+
+#define MINI12864_NVS_NAMESPACE "mini12864"
+#define MINI12864_NVS_KEY       "config"
+#define MINI12864_CONFIG_REV    1
+
+// Mini 12864 config (loaded from NVS at init, applied at runtime)
+static mini_12864_config_t s_mini12864_config = {
+    .inverted_encoder = false,
+    .display_rotation = 0,
+};
 
 #define LVGL_TASK_STACK_SIZE  (8 * 1024)
 #define LVGL_TASK_PRIORITY    5
@@ -57,13 +69,20 @@ static void disp_flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px
 
     memset(s_st7567_fb, 0, sizeof(s_st7567_fb));
 
+    const bool rot180 = (s_mini12864_config.display_rotation == 2);
+
     for (int page = 0; page < ST7567_PAGES; page++) {
         for (int col = 0; col < ST7567_WIDTH; col++) {
             uint8_t page_byte = 0;
             for (int bit = 0; bit < 8; bit++) {
-                int row = page * 8 + bit;
-                int byte_idx = row * stride + (col / 8);
-                int bit_idx = 7 - (col % 8);
+                // For 180° rotation, read from opposite corner of LVGL buffer:
+                //   row = (7-page)*8 + (7-bit),  src_col = (127-col)
+                int row     = rot180 ? (ST7567_PAGES - 1 - page) * 8 + (7 - bit)
+                                     : page * 8 + bit;
+                int src_col = rot180 ? (ST7567_WIDTH - 1 - col) : col;
+
+                int byte_idx = row * stride + (src_col / 8);
+                int bit_idx  = 7 - (src_col % 8);
                 // LVGL I1: 1 = white/bright, 0 = black/dark
                 // UC1701 normal mode (0xA6): 1 = pixel ON (dark), 0 = pixel OFF (light)
                 // Invert: LVGL white (1) → UC1701 OFF (0), LVGL black (0) → UC1701 ON (1)
@@ -117,10 +136,10 @@ static void encoder_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
     while (encoder_poll(&evt)) {
         switch (evt) {
         case ENC_EVT_CW:
-            data->enc_diff++;
+            data->enc_diff += s_mini12864_config.inverted_encoder ? -1 : 1;
             break;
         case ENC_EVT_CCW:
-            data->enc_diff--;
+            data->enc_diff += s_mini12864_config.inverted_encoder ? 1 : -1;
             break;
         case ENC_EVT_BTN_DOWN:
             s_btn_pressed = true;
@@ -196,6 +215,21 @@ esp_err_t lvgl_port_init(const lvgl_port_cfg_t *cfg)
                            sizeof(s_lv_buf1), LV_DISPLAY_RENDER_MODE_FULL);
     lv_display_set_flush_cb(s_disp, disp_flush_cb);
 
+    // Load persisted mini12864 config and apply display rotation
+    {
+        nvs_handle_t nvs;
+        if (nvs_open(MINI12864_NVS_NAMESPACE, NVS_READONLY, &nvs) == ESP_OK) {
+            mini_12864_config_t tmp;
+            size_t sz = sizeof(tmp);
+            if (nvs_get_blob(nvs, MINI12864_NVS_KEY, &tmp, &sz) == ESP_OK && sz == sizeof(tmp)) {
+                s_mini12864_config = tmp;
+                ESP_LOGI(TAG, "Loaded mini12864 config: enc_inv=%d rot=%d",
+                         s_mini12864_config.inverted_encoder,
+                         s_mini12864_config.display_rotation);
+            }
+            nvs_close(nvs);
+        }
+    }
     ESP_LOGI(TAG, "LVGL display created (128x64 monochrome)");
 
     // Initialize encoder if configured
@@ -240,4 +274,37 @@ void lvgl_port_unlock(void)
     if (s_lvgl_mutex) {
         xSemaphoreGive(s_lvgl_mutex);
     }
+}
+
+void lvgl_port_get_mini12864_config(mini_12864_config_t *config)
+{
+    *config = s_mini12864_config;
+}
+
+esp_err_t lvgl_port_set_mini12864_config(const mini_12864_config_t *config, bool save)
+{
+    s_mini12864_config = *config;
+
+    if (!save) {
+        return ESP_OK;
+    }
+
+    nvs_handle_t nvs;
+    esp_err_t ret = nvs_open(MINI12864_NVS_NAMESPACE, NVS_READWRITE, &nvs);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to open NVS for mini12864: %s", esp_err_to_name(ret));
+        return ret;
+    }
+    ret = nvs_set_blob(nvs, MINI12864_NVS_KEY, config, sizeof(mini_12864_config_t));
+    if (ret == ESP_OK) {
+        ret = nvs_commit(nvs);
+    }
+    nvs_close(nvs);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to save mini12864 config: %s", esp_err_to_name(ret));
+    } else {
+        ESP_LOGI(TAG, "Saved mini12864 config: enc_inv=%d rot=%d",
+                 config->inverted_encoder, config->display_rotation);
+    }
+    return ret;
 }

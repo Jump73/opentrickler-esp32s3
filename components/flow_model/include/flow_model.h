@@ -66,6 +66,7 @@ float flow_model_get_inertia_overshoot(uint8_t profile_idx, uint8_t motor);
 // Persistence
 esp_err_t flow_model_save(uint8_t profile_idx);
 esp_err_t flow_model_load(uint8_t profile_idx);
+esp_err_t flow_model_reset(uint8_t profile_idx);
 
 // Confidence query — true when enough bins have sufficient data
 bool flow_model_is_trusted(uint8_t profile_idx, uint8_t motor);

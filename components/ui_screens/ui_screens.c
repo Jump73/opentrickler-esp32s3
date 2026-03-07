@@ -39,6 +39,7 @@ static lv_group_t *s_group = NULL;
 
 // Bitmap fonts
 LV_FONT_DECLARE(lv_font_unscii_8);
+LV_FONT_DECLARE(lv_font_unscii_8_prop);
 LV_FONT_DECLARE(lv_font_unscii_16);
 
 // ---------------------------------------------------------------------------
@@ -138,7 +139,7 @@ static lv_obj_t *create_menu_btn(lv_obj_t *parent, const char *text,
     lv_obj_set_style_text_color(btn, lv_color_white(), LV_STATE_FOCUSED);
 
     lv_obj_t *label = lv_label_create(btn);
-    lv_obj_set_style_text_font(label, &lv_font_unscii_8, 0);
+    lv_obj_set_style_text_font(label, &lv_font_unscii_8_prop, 0);
     lv_label_set_text(label, text);
     lv_obj_center(label);
 
@@ -170,7 +171,7 @@ static lv_obj_t *create_inline_btn(lv_obj_t *parent, const char *text,
     lv_obj_set_style_text_color(btn, lv_color_black(), LV_STATE_DEFAULT);
     lv_obj_set_style_text_color(btn, lv_color_white(), LV_STATE_FOCUSED);
     lv_obj_t *lbl = lv_label_create(btn);
-    lv_obj_set_style_text_font(lbl, &lv_font_unscii_8, 0);
+    lv_obj_set_style_text_font(lbl, &lv_font_unscii_8_prop, 0);
     lv_label_set_text(lbl, text);
     lv_obj_center(lbl);
     if (cb) lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, NULL);
@@ -557,7 +558,7 @@ static void rebuild_weight_input(void)
 
     // Title
     lv_obj_t *title = lv_label_create(s_scr_weight_input);
-    lv_obj_set_style_text_font(title, &lv_font_unscii_8, 0);
+    lv_obj_set_style_text_font(title, &lv_font_unscii_8_prop, 0);
     lv_label_set_text(title, "Set Weight:");
     lv_obj_set_pos(title, 2, 2);
 
@@ -612,13 +613,13 @@ static void rebuild_weight_input(void)
 
     // "gr" unit label
     lv_obj_t *unit = lv_label_create(s_scr_weight_input);
-    lv_obj_set_style_text_font(unit, &lv_font_unscii_8, 0);
+    lv_obj_set_style_text_font(unit, &lv_font_unscii_8_prop, 0);
     lv_label_set_text(unit, "gr");
     lv_obj_set_pos(unit, x + 4, y + 7);
 
     // Hint
     lv_obj_t *hint = lv_label_create(s_scr_weight_input);
-    lv_obj_set_style_text_font(hint, &lv_font_unscii_8, 0);
+    lv_obj_set_style_text_font(hint, &lv_font_unscii_8_prop, 0);
     lv_label_set_text(hint, "Turn:Move Click:+1");
     lv_obj_set_pos(hint, 2, 40);
 
@@ -638,18 +639,18 @@ static void create_charge_screen(void)
     lv_obj_set_style_border_width(s_scr_charge, 0, 0);
 
     s_lbl_charge_title = lv_label_create(s_scr_charge);
-    lv_obj_set_style_text_font(s_lbl_charge_title, &lv_font_unscii_8, 0);
+    lv_obj_set_style_text_font(s_lbl_charge_title, &lv_font_unscii_8_prop, 0);
     lv_label_set_text(s_lbl_charge_title, "Wait Zero");
     lv_obj_align(s_lbl_charge_title, LV_ALIGN_TOP_LEFT, 0, 0);
 
     s_lbl_charge_timer = lv_label_create(s_scr_charge);
-    lv_obj_set_style_text_font(s_lbl_charge_timer, &lv_font_unscii_8, 0);
+    lv_obj_set_style_text_font(s_lbl_charge_timer, &lv_font_unscii_8_prop, 0);
     lv_label_set_text(s_lbl_charge_timer, "");
     lv_obj_align(s_lbl_charge_timer, LV_ALIGN_TOP_RIGHT, 0, 0);
 
     // Target weight (set when entering charge mode)
     s_lbl_charge_target = lv_label_create(s_scr_charge);
-    lv_obj_set_style_text_font(s_lbl_charge_target, &lv_font_unscii_8, 0);
+    lv_obj_set_style_text_font(s_lbl_charge_target, &lv_font_unscii_8_prop, 0);
     lv_label_set_text(s_lbl_charge_target, "");
     lv_obj_align(s_lbl_charge_target, LV_ALIGN_TOP_LEFT, 0, 12);
 
@@ -661,12 +662,12 @@ static void create_charge_screen(void)
 
     // Over/under charge result (shown only in WAIT_FOR_CUP_REMOVAL)
     s_lbl_charge_result = lv_label_create(s_scr_charge);
-    lv_obj_set_style_text_font(s_lbl_charge_result, &lv_font_unscii_8, 0);
+    lv_obj_set_style_text_font(s_lbl_charge_result, &lv_font_unscii_8_prop, 0);
     lv_label_set_text(s_lbl_charge_result, "");
     lv_obj_align(s_lbl_charge_result, LV_ALIGN_CENTER, 0, 11);
 
     s_lbl_charge_profile = lv_label_create(s_scr_charge);
-    lv_obj_set_style_text_font(s_lbl_charge_profile, &lv_font_unscii_8, 0);
+    lv_obj_set_style_text_font(s_lbl_charge_profile, &lv_font_unscii_8_prop, 0);
     lv_label_set_text(s_lbl_charge_profile, "");
     lv_obj_align(s_lbl_charge_profile, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
 
@@ -682,12 +683,12 @@ static void create_cleanup_screen(void)
     lv_obj_set_style_border_width(s_scr_cleanup, 0, 0);
 
     lv_obj_t *t = lv_label_create(s_scr_cleanup);
-    lv_obj_set_style_text_font(t, &lv_font_unscii_8, 0);
+    lv_obj_set_style_text_font(t, &lv_font_unscii_8_prop, 0);
     lv_label_set_text(t, "Cleanup Mode");
     lv_obj_align(t, LV_ALIGN_TOP_LEFT, 0, 0);
 
     s_lbl_cleanup_weight = lv_label_create(s_scr_cleanup);
-    lv_obj_set_style_text_font(s_lbl_cleanup_weight, &lv_font_unscii_8, 0);
+    lv_obj_set_style_text_font(s_lbl_cleanup_weight, &lv_font_unscii_8_prop, 0);
     lv_label_set_text(s_lbl_cleanup_weight, "W: ---");
     lv_obj_align(s_lbl_cleanup_weight, LV_ALIGN_TOP_RIGHT, 0, 0);
 
@@ -697,7 +698,7 @@ static void create_cleanup_screen(void)
     lv_obj_align(s_lbl_cleanup_speed, LV_ALIGN_CENTER, 0, -4);
 
     lv_obj_t *h = lv_label_create(s_scr_cleanup);
-    lv_obj_set_style_text_font(h, &lv_font_unscii_8, 0);
+    lv_obj_set_style_text_font(h, &lv_font_unscii_8_prop, 0);
     lv_label_set_text(h, "Turn=Speed");
     lv_obj_align(h, LV_ALIGN_BOTTOM_LEFT, 0, -14);
 
@@ -710,13 +711,13 @@ static void create_wireless_screen(void)
     s_scr_wireless = create_menu_screen();
 
     s_lbl_wifi_status = lv_label_create(s_scr_wireless);
-    lv_obj_set_style_text_font(s_lbl_wifi_status, &lv_font_unscii_8, 0);
+    lv_obj_set_style_text_font(s_lbl_wifi_status, &lv_font_unscii_8_prop, 0);
     lv_obj_set_style_pad_left(s_lbl_wifi_status, 2, 0);
     lv_obj_set_style_pad_top(s_lbl_wifi_status, 2, 0);
     lv_label_set_text(s_lbl_wifi_status, "WiFi: ---");
 
     s_lbl_wifi_ip = lv_label_create(s_scr_wireless);
-    lv_obj_set_style_text_font(s_lbl_wifi_ip, &lv_font_unscii_8, 0);
+    lv_obj_set_style_text_font(s_lbl_wifi_ip, &lv_font_unscii_8_prop, 0);
     lv_obj_set_style_pad_left(s_lbl_wifi_ip, 2, 0);
     lv_label_set_text(s_lbl_wifi_ip, "IP: ---");
 
@@ -740,13 +741,13 @@ static void create_scale_settings_screen(void)
     s_scr_scale_settings = create_menu_screen();
 
     s_lbl_scale_driver = lv_label_create(s_scr_scale_settings);
-    lv_obj_set_style_text_font(s_lbl_scale_driver, &lv_font_unscii_8, 0);
+    lv_obj_set_style_text_font(s_lbl_scale_driver, &lv_font_unscii_8_prop, 0);
     lv_obj_set_style_pad_left(s_lbl_scale_driver, 2, 0);
     lv_obj_set_style_pad_top(s_lbl_scale_driver, 2, 0);
     lv_label_set_text(s_lbl_scale_driver, "Drv: ---");
 
     s_lbl_scale_baudrate = lv_label_create(s_scr_scale_settings);
-    lv_obj_set_style_text_font(s_lbl_scale_baudrate, &lv_font_unscii_8, 0);
+    lv_obj_set_style_text_font(s_lbl_scale_baudrate, &lv_font_unscii_8_prop, 0);
     lv_obj_set_style_pad_left(s_lbl_scale_baudrate, 2, 0);
     lv_label_set_text(s_lbl_scale_baudrate, "Baud: ---");
 
@@ -783,7 +784,7 @@ static void rebuild_profile_view(uint8_t idx)
     s_scr_profile_view = create_menu_screen();
 
     s_lbl_profile_info = lv_label_create(s_scr_profile_view);
-    lv_obj_set_style_text_font(s_lbl_profile_info, &lv_font_unscii_8, 0);
+    lv_obj_set_style_text_font(s_lbl_profile_info, &lv_font_unscii_8_prop, 0);
     lv_obj_set_style_pad_all(s_lbl_profile_info, 2, 0);
 
     profile_t *p = profile_get_by_idx(idx);
@@ -812,7 +813,7 @@ static void create_version_screen(void)
 {
     s_scr_version = create_menu_screen();
     s_lbl_ver_text = lv_label_create(s_scr_version);
-    lv_obj_set_style_text_font(s_lbl_ver_text, &lv_font_unscii_8, 0);
+    lv_obj_set_style_text_font(s_lbl_ver_text, &lv_font_unscii_8_prop, 0);
     lv_obj_set_style_pad_all(s_lbl_ver_text, 2, 0);
     lv_label_set_text(s_lbl_ver_text, "Loading...");
     create_menu_btn(s_scr_version, "< Back", evt_goto_settings, NULL);
@@ -927,11 +928,15 @@ void ui_screens_update(void)
         int32_t pos = encoder_get_position();
         int32_t delta = pos - s_cleanup_last_enc_pos;
         s_cleanup_last_enc_pos = pos;
+        // Apply encoder inversion (mirrors LVGL encoder_read_cb behaviour)
+        mini_12864_config_t enc_cfg;
+        lvgl_port_get_mini12864_config(&enc_cfg);
+        if (enc_cfg.inverted_encoder) delta = -delta;
 
         if (delta != 0) {
             // 4 raw transitions per detent -> 0.1 rps per detent
             s_cleanup_speed += (float)delta * 0.025f;
-            if (s_cleanup_speed < 0.0f) s_cleanup_speed = 0.0f;
+            if (s_cleanup_speed < -10.0f) s_cleanup_speed = -10.0f;
             if (s_cleanup_speed > 10.0f) s_cleanup_speed = 10.0f;
             cleanup_mode_set_speed(s_cleanup_speed);
         }

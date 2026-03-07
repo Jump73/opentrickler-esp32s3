@@ -1231,3 +1231,98 @@ char* rest_neopixel_led_config_handler(int num_params, char *params[], char *val
 
     return neopixel_config_json_buffer;
 }
+
+// Mini 12864 module configuration handler
+// GET  /rest/mini_12864_config            -> {"b0":bool,"b1":int}
+// POST /rest/mini_12864_config?b0=&b1=&ee=save
+char* rest_mini_12864_config_handler(int num_params, char *params[], char *values[])
+{
+    static char mini12864_json_buffer[64];
+    mini_12864_config_t config;
+    bool save_to_nvs = false;
+    bool config_changed = false;
+
+    ESP_LOGI(TAG, "Mini12864 config request with %d params", num_params);
+
+    lvgl_port_get_mini12864_config(&config);
+
+    if (num_params == 0) {
+        snprintf(mini12864_json_buffer, sizeof(mini12864_json_buffer),
+                 "{\"b0\":%s,\"b1\":%d}",
+                 boolean_to_string(config.inverted_encoder),
+                 (int)config.display_rotation);
+        return mini12864_json_buffer;
+    }
+
+    for (int idx = 0; idx < num_params; idx++) {
+        ESP_LOGI(TAG, "  Param[%d]: %s = %s", idx, params[idx], values[idx]);
+
+        if (strcmp(params[idx], "b0") == 0) {
+            config.inverted_encoder = string_to_boolean(values[idx]);
+            config_changed = true;
+        } else if (strcmp(params[idx], "b1") == 0) {
+            config.display_rotation = (uint8_t)atoi(values[idx]);
+            config_changed = true;
+        } else if (strcmp(params[idx], "ee") == 0) {
+            save_to_nvs = true;
+        }
+    }
+
+    if (config_changed) {
+        lvgl_port_set_mini12864_config(&config, save_to_nvs);
+    }
+
+    snprintf(mini12864_json_buffer, sizeof(mini12864_json_buffer),
+             "{\"b0\":%s,\"b1\":%d}",
+             boolean_to_string(config.inverted_encoder),
+             (int)config.display_rotation);
+    return mini12864_json_buffer;
+}
+
+// Flow model endpoint
+// GET /rest/flow_model[?pf=<idx>]        — returns model summary
+// GET /rest/flow_model?pf=<idx>&reset=1  — resets model for profile
+char* rest_flow_model_handler(int num_params, char *params[], char *values[])
+{
+    static char flow_model_json_buffer[256];
+    uint8_t profile_idx = profile_get_selected_idx();
+    bool do_reset = false;
+
+    for (int idx = 0; idx < num_params; idx++) {
+        if (strcmp(params[idx], "pf") == 0) {
+            profile_idx = (uint8_t)atoi(values[idx]);
+        } else if (strcmp(params[idx], "reset") == 0 && string_to_boolean(values[idx])) {
+            do_reset = true;
+        }
+    }
+
+    if (do_reset) {
+        esp_err_t ret = flow_model_reset(profile_idx);
+        if (ret != ESP_OK) {
+            snprintf(flow_model_json_buffer, sizeof(flow_model_json_buffer),
+                     "{\"error\":\"ResetFailed\",\"pf\":%d}", profile_idx);
+            return flow_model_json_buffer;
+        }
+        ESP_LOGI(TAG, "Flow model reset for profile %d via REST", profile_idx);
+    }
+
+    flow_model_t fm;
+    if (flow_model_get(profile_idx, &fm) != ESP_OK) {
+        snprintf(flow_model_json_buffer, sizeof(flow_model_json_buffer),
+                 "{\"error\":\"ProfileNotFound\",\"pf\":%d}", profile_idx);
+        return flow_model_json_buffer;
+    }
+
+    snprintf(flow_model_json_buffer, sizeof(flow_model_json_buffer),
+             "{\"pf\":%d,\"coarse_trusted\":%s,\"fine_trusted\":%s,"
+             "\"coarse_overshoot\":%.4f,\"fine_overshoot\":%.4f,"
+             "\"coarse_delay\":%.1f,\"fine_delay\":%.1f}",
+             profile_idx,
+             boolean_to_string(flow_model_is_trusted(profile_idx, 0)),
+             boolean_to_string(flow_model_is_trusted(profile_idx, 1)),
+             fm.coarse.inertia_overshoot_gn,
+             fm.fine.inertia_overshoot_gn,
+             fm.coarse.transport_delay_ms,
+             fm.fine.transport_delay_ms);
+    return flow_model_json_buffer;
+}
