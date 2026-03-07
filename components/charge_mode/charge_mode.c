@@ -99,7 +99,7 @@ static charge_mode_config_t charge_mode_config = {
 
     .coarse_stop_threshold = 5.0f,      // Original default: 5 grains
     .fine_stop_threshold = 0.03f,        // Original default: 0.03 grains
-    .fine_trickle_threshold = 0.3f,
+    .fine_trickle_threshold = 0.2f,
     .set_point_sd_margin = 0.02f,
     .set_point_mean_margin = 0.02f,
 
@@ -852,6 +852,20 @@ esp_err_t charge_mode_load_config(charge_mode_config_t *config)
     if (ret != ESP_OK) {
         ESP_LOGW(TAG, "No saved charge mode config found");
         return ret;
+    }
+
+    size_t stored_size = 0;
+    ret = nvs_get_blob(nvs_handle, NVS_KEY_CONFIG, NULL, &stored_size);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to get config size: %s", esp_err_to_name(ret));
+        nvs_close(nvs_handle);
+        return ret;
+    }
+    if (stored_size != sizeof(charge_mode_config_t)) {
+        ESP_LOGW(TAG, "Config size mismatch (stored=%d, expected=%d) - using defaults",
+                 (int)stored_size, (int)sizeof(charge_mode_config_t));
+        nvs_close(nvs_handle);
+        return ESP_ERR_NVS_INVALID_LENGTH;
     }
 
     size_t required_size = sizeof(charge_mode_config_t);
