@@ -15,6 +15,7 @@
 #include "autotune.h"
 #include "flow_model.h"
 #include "ble_uart.h"
+#include "ble_commands.h"
 
 // Display and LVGL
 #include "ot_pins.h"
@@ -34,9 +35,7 @@ static st7567_t s_lcd;
 // ---------------------------------------------------------------------------
 static void ble_rx_handler(const uint8_t *data, size_t len)
 {
-    // Echo back for now — protocol to be implemented
-    ESP_LOGI(TAG, "BLE RX (%d bytes): %.*s", (int)len, (int)len, (const char *)data);
-    ble_uart_send(data, len);
+    ble_commands_handle(data, len);
 }
 
 // ---------------------------------------------------------------------------
