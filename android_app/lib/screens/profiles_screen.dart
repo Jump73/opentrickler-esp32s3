@@ -57,8 +57,6 @@ class _ProfilesScreenState extends State<ProfilesScreen> {
   }
 
   void _openProfile(BuildContext ctx, ProfileInfo p) {
-    widget.bleService.selectProfile(p.index);
-    widget.bleService.requestProfileConfig(p.index);
     Navigator.push(
       ctx,
       MaterialPageRoute(
@@ -102,6 +100,12 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
   bool _loaded = false;
 
   @override
+  void initState() {
+    super.initState();
+    widget.bleService.requestProfileConfig(widget.profileIndex);
+  }
+
+  @override
   void dispose() {
     for (final c in [_name, _cKp, _cKi, _cKd, _cMin, _cMax,
                      _fKp, _fKi, _fKd, _fMin, _fMax]) {
@@ -129,8 +133,9 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
-    if (state.currentProfileDetails?.index == widget.profileIndex) {
-      _loadFrom(state.currentProfileDetails!);
+    final details = state.currentProfileDetails;
+    if (!_loaded && details != null && details.index == widget.profileIndex) {
+      _loadFrom(details);
     }
 
     return Scaffold(
