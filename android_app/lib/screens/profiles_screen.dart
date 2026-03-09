@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/ble_service.dart';
@@ -98,19 +99,28 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
   final _fMin = TextEditingController();
   final _fMax = TextEditingController();
   bool _loaded = false;
+  Timer? _loadTimer;
 
   @override
   void initState() {
     super.initState();
-    // Clear any previous error before requesting new profile
+    // Clear stale details from any previous profile view
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) context.read<AppState>().clearProfileConfigError();
+      if (mounted) context.read<AppState>().clearProfileConfig();
     });
     widget.bleService.requestProfileConfig(widget.profileIndex);
+    // Fallback: if no response in 2 s (non-existent profile, lost packet,
+    // old firmware), load with empty defaults so the form is usable.
+    _loadTimer = Timer(const Duration(seconds: 2), () {
+      if (mounted && !_loaded) {
+        setState(() => _loadFrom(ProfileDetails(index: widget.profileIndex)));
+      }
+    });
   }
 
   @override
   void dispose() {
+    _loadTimer?.cancel();
     for (final c in [_name, _cKp, _cKi, _cKd, _cMin, _cMax,
                      _fKp, _fKi, _fKd, _fMin, _fMax]) {
       c.dispose();
@@ -138,14 +148,9 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
     if (!_loaded) {
-      if (state.profileConfigError) {
-        // Profile doesn't exist on device — load with empty defaults
-        _loadFrom(ProfileDetails(index: widget.profileIndex));
-      } else {
-        final details = state.currentProfileDetails;
-        if (details != null && details.index == widget.profileIndex) {
-          _loadFrom(details);
-        }
+      final details = state.currentProfileDetails;
+      if (details != null && details.index == widget.profileIndex) {
+        _loadFrom(details);
       }
     }
 
