@@ -2,6 +2,35 @@ import 'package:flutter/foundation.dart';
 
 enum ChargeState { exit, waitForZero, charging, removeCup, returnCup }
 
+// Charge event bitmask (matches ESP32 charge_mode.c)
+const int kEventUnder = 1 << 1; // 0x02
+const int kEventOver  = 1 << 2; // 0x04
+
+class ChargeRecord {
+  final double target;
+  final String weight;
+  final String time;
+  final int event;
+
+  const ChargeRecord({
+    required this.target,
+    required this.weight,
+    required this.time,
+    required this.event,
+  });
+
+  String get result {
+    if (event & kEventOver  != 0) return 'OVER';
+    if (event & kEventUnder != 0) return 'UNDER';
+    return 'OK';
+  }
+
+  double get error {
+    final w = double.tryParse(weight) ?? 0;
+    return w - target;
+  }
+}
+
 class ProfileInfo {
   final int index;
   final String name;
@@ -57,11 +86,15 @@ class AppState extends ChangeNotifier {
   double targetWeight = 0.0;
   String currentWeight = '---';
   ChargeState chargeState = ChargeState.exit;
+  ChargeState _prevChargeState = ChargeState.exit;
   int chargeEvent = 0;
   String profileName = '';
   String elapsedTime = '0.0';
   String settledWeight = '---';
   String settledTime = '---';
+
+  // --- Charge history ---
+  List<ChargeRecord> chargeHistory = [];
 
   // --- Profiles ---
   List<ProfileInfo> profiles = [];
@@ -84,15 +117,29 @@ class AppState extends ChangeNotifier {
   // -------------------------------------------------------------------
 
   void updateChargeState(Map<String, dynamic> j) {
-    targetWeight = (j['s0'] as num?)?.toDouble() ?? targetWeight;
-    currentWeight = j['s1'] as String? ?? '---';
-    final s2 = (j['s2'] as num?)?.toInt() ?? 0;
-    chargeState = ChargeState.values[s2.clamp(0, 4)];
-    chargeEvent = (j['s3'] as num?)?.toInt() ?? 0;
-    profileName = j['s4'] as String? ?? profileName;
-    elapsedTime = j['s5'] as String? ?? '0.0';
-    settledWeight = j['s6'] as String? ?? '---';
-    settledTime = j['s7'] as String? ?? '---';
+    targetWeight   = (j['s0'] as num?)?.toDouble() ?? targetWeight;
+    currentWeight  = j['s1'] as String? ?? '---';
+    final s2       = (j['s2'] as num?)?.toInt() ?? 0;
+    chargeState    = ChargeState.values[s2.clamp(0, 4)];
+    chargeEvent    = (j['s3'] as num?)?.toInt() ?? 0;
+    profileName    = j['s4'] as String? ?? profileName;
+    elapsedTime    = j['s5'] as String? ?? '0.0';
+    settledWeight  = j['s6'] as String? ?? '---';
+    settledTime    = j['s7'] as String? ?? '---';
+
+    // Record history on transition into REMOVE_CUP
+    if (chargeState == ChargeState.removeCup &&
+        _prevChargeState != ChargeState.removeCup) {
+      chargeHistory.insert(0, ChargeRecord(
+        target: targetWeight,
+        weight: settledWeight,
+        time:   elapsedTime,
+        event:  chargeEvent,
+      ));
+      if (chargeHistory.length > 20) chargeHistory.removeLast();
+    }
+    _prevChargeState = chargeState;
+
     notifyListeners();
   }
 
@@ -112,20 +159,20 @@ class AppState extends ChangeNotifier {
   }
 
   void updateScaleConfig(Map<String, dynamic> j) {
-    scaleDriver = (j['s0'] as num?)?.toInt() ?? scaleDriver;
+    scaleDriver   = (j['s0'] as num?)?.toInt() ?? scaleDriver;
     scaleBaudrate = (j['s1'] as num?)?.toInt() ?? scaleBaudrate;
     notifyListeners();
   }
 
   void updateChargeConfig(Map<String, dynamic> j) {
-    coarseStopThreshold = (j['c5'] as num?)?.toDouble() ?? coarseStopThreshold;
-    fineStopThreshold = (j['c6'] as num?)?.toDouble() ?? fineStopThreshold;
+    coarseStopThreshold  = (j['c5']  as num?)?.toDouble() ?? coarseStopThreshold;
+    fineStopThreshold    = (j['c6']  as num?)?.toDouble() ?? fineStopThreshold;
     fineTrickleThreshold = (j['c13'] as num?)?.toDouble() ?? fineTrickleThreshold;
     notifyListeners();
   }
 
   void updateSystemInfo(Map<String, dynamic> j) {
-    deviceId = j['s0'] as String? ?? deviceId;
+    deviceId        = j['s0'] as String? ?? deviceId;
     firmwareVersion = j['s1'] as String? ?? firmwareVersion;
     notifyListeners();
   }
@@ -136,7 +183,8 @@ class AppState extends ChangeNotifier {
     connectedDeviceName = name;
     if (!connected) {
       currentWeight = '---';
-      chargeState = ChargeState.exit;
+      chargeState   = ChargeState.exit;
+      _prevChargeState = ChargeState.exit;
     }
     notifyListeners();
   }

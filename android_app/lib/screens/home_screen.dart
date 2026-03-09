@@ -34,7 +34,6 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
 
-    // Sync target weight from device if user isn't editing
     if (!_targetEditing && state.targetWeight > 0 && _localTarget == 0.0) {
       _localTarget = state.targetWeight;
       _targetCtrl.text = _localTarget.toStringAsFixed(3);
@@ -45,9 +44,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(
-          state.profileName.isNotEmpty ? state.profileName : 'OpenTrickler',
-        ),
+        title: const Text('OpenTrickler'),
+        centerTitle: true,
         actions: [
           IconButton(
             icon: const Icon(Icons.bluetooth_connected),
@@ -56,73 +54,70 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ],
       ),
-      drawer: _buildDrawer(context),
+      drawer: _buildDrawer(context, state),
       body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(12),
           child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // --- Weight display ---
-              Expanded(
-                flex: 3,
-                child: Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Text(
-                        state.currentWeight,
-                        style: TextStyle(
-                          fontSize: 80,
-                          fontWeight: FontWeight.bold,
-                          fontFeatures: const [],
-                          color: _weightColor(state),
-                          letterSpacing: -2,
-                        ),
-                      ),
-                      Text(
-                        'gr',
-                        style: Theme.of(context)
-                            .textTheme
-                            .headlineMedium
-                            ?.copyWith(color: Colors.grey),
-                      ),
-                      const SizedBox(height: 12),
-                      _stateChip(state),
-                      if (state.chargeState == ChargeState.removeCup ||
-                          state.chargeState == ChargeState.returnCup)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 8),
-                          child: Text(
-                            'Settled: ${state.settledWeight} gr  •  ${state.settledTime} s',
-                            style: Theme.of(context)
-                                .textTheme
-                                .bodyMedium
-                                ?.copyWith(color: Colors.grey),
-                          ),
-                        ),
-                      if (isActive)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 4),
-                          child: Text(
-                            '⏱  ${state.elapsedTime} s',
-                            style: Theme.of(context).textTheme.bodyMedium,
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-              ),
-
-              // --- Target weight ---
+              // ── Stat boxes row ───────────────────────────────────────
               Row(
                 children: [
-                  _stepBtn(Icons.remove, () => _adjustTarget(-0.02)),
+                  Expanded(child: _weightBox(context, state)),
+                  const SizedBox(width: 12),
+                  Expanded(child: _timeBox(context, state)),
+                ],
+              ),
+              const SizedBox(height: 10),
+
+              // ── Progress bar ─────────────────────────────────────────
+              _progressBar(state),
+              const SizedBox(height: 10),
+
+              // ── Stepper ──────────────────────────────────────────────
+              _chargeStepper(context, state),
+              const SizedBox(height: 10),
+
+              // ── Result banner ─────────────────────────────────────────
+              if (state.chargeState == ChargeState.removeCup ||
+                  state.chargeState == ChargeState.returnCup)
+                _resultBanner(context, state),
+
+              // ── Profile name ─────────────────────────────────────────
+              if (state.profileName.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: GestureDetector(
+                    onTap: () => _openProfiles(context),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Icon(Icons.tune, size: 16, color: Colors.amber),
+                        const SizedBox(width: 4),
+                        Text(
+                          state.profileName,
+                          style: const TextStyle(
+                              color: Colors.amber, fontWeight: FontWeight.w600),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+
+              // ── Target weight input ──────────────────────────────────
+              Row(
+                children: [
+                  _stepBtn(Icons.remove,              () => _adjustTarget(-0.02)),
                   _stepBtn(Icons.remove_circle_outline, () => _adjustTarget(-0.1)),
                   Expanded(
                     child: TextField(
                       controller: _targetCtrl,
-                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                      keyboardType:
+                          const TextInputType.numberWithOptions(decimal: true),
                       textAlign: TextAlign.center,
+                      style: const TextStyle(
+                          fontSize: 18, fontWeight: FontWeight.bold),
                       decoration: const InputDecoration(
                         labelText: 'Target (gr)',
                         border: OutlineInputBorder(),
@@ -138,12 +133,12 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                   ),
                   _stepBtn(Icons.add_circle_outline, () => _adjustTarget(0.1)),
-                  _stepBtn(Icons.add, () => _adjustTarget(0.02)),
+                  _stepBtn(Icons.add,                () => _adjustTarget(0.02)),
                 ],
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 10),
 
-              // --- Action buttons ---
+              // ── Action buttons ───────────────────────────────────────
               Row(
                 children: [
                   Expanded(
@@ -156,7 +151,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                       onPressed: isActive ? _abort : _start,
                       child: Text(
-                        isActive ? 'ABORT' : 'START',
+                        isActive ? 'STOP' : 'START',
                         style: const TextStyle(
                             fontSize: 22, fontWeight: FontWeight.bold),
                       ),
@@ -167,8 +162,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     flex: 1,
                     child: OutlinedButton(
                       style: OutlinedButton.styleFrom(
-                        minimumSize: const Size.fromHeight(56),
-                      ),
+                          minimumSize: const Size.fromHeight(56)),
                       onPressed: widget.bleService.zeroScale,
                       child: const Column(
                         mainAxisSize: MainAxisSize.min,
@@ -181,7 +175,13 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 ],
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 16),
+
+              // ── Charge history ───────────────────────────────────────
+              if (state.chargeHistory.isNotEmpty) ...[
+                const Divider(),
+                _historyTable(context, state),
+              ],
             ],
           ),
         ),
@@ -189,7 +189,283 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _buildDrawer(BuildContext context) {
+  // ---------------------------------------------------------------------------
+  // Widgets
+  // ---------------------------------------------------------------------------
+
+  Widget _weightBox(BuildContext context, AppState state) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Weight',
+                style: Theme.of(context)
+                    .textTheme
+                    .labelSmall
+                    ?.copyWith(color: Colors.grey)),
+            const SizedBox(height: 4),
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.centerLeft,
+              child: Text(
+                state.currentWeight,
+                style: TextStyle(
+                  fontSize: 52,
+                  fontWeight: FontWeight.bold,
+                  color: _weightColor(state),
+                  letterSpacing: -1,
+                ),
+              ),
+            ),
+            Text('gr',
+                style: Theme.of(context)
+                    .textTheme
+                    .bodySmall
+                    ?.copyWith(color: Colors.grey)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _timeBox(BuildContext context, AppState state) {
+    final isActive = state.chargeState == ChargeState.waitForZero ||
+        state.chargeState == ChargeState.charging;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Time',
+                style: Theme.of(context)
+                    .textTheme
+                    .labelSmall
+                    ?.copyWith(color: Colors.grey)),
+            const SizedBox(height: 4),
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.centerLeft,
+              child: Text(
+                isActive ? '${state.elapsedTime} s' : '--- s',
+                style: const TextStyle(
+                    fontSize: 52, fontWeight: FontWeight.bold),
+              ),
+            ),
+            Text(
+              (state.chargeState == ChargeState.removeCup ||
+                      state.chargeState == ChargeState.returnCup)
+                  ? 'Settled: ${state.settledWeight} gr'
+                  : 'Target: ${state.targetWeight.toStringAsFixed(3)} gr',
+              style: Theme.of(context)
+                  .textTheme
+                  .bodySmall
+                  ?.copyWith(color: Colors.grey),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _progressBar(AppState state) {
+    double frac = 0;
+    if (state.targetWeight > 0) {
+      final w = double.tryParse(state.currentWeight) ?? 0;
+      frac = (w / state.targetWeight).clamp(0.0, 1.0);
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(4),
+          child: LinearProgressIndicator(
+            value: frac,
+            minHeight: 8,
+            backgroundColor: Colors.grey[800],
+            color: _progressColor(state, frac),
+          ),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          '${(frac * 100).toStringAsFixed(0)}%',
+          textAlign: TextAlign.right,
+          style: const TextStyle(fontSize: 11, color: Colors.grey),
+        ),
+      ],
+    );
+  }
+
+  Widget _chargeStepper(BuildContext context, AppState state) {
+    const steps = [
+      ('Wait',    ChargeState.waitForZero),
+      ('Charge',  ChargeState.charging),
+      ('Remove',  ChargeState.removeCup),
+      ('Return',  ChargeState.returnCup),
+    ];
+    final activeIdx = switch (state.chargeState) {
+      ChargeState.exit        => -1,
+      ChargeState.waitForZero => 0,
+      ChargeState.charging    => 1,
+      ChargeState.removeCup   => 2,
+      ChargeState.returnCup   => 3,
+    };
+    return Row(
+      children: List.generate(steps.length * 2 - 1, (i) {
+        if (i.isOdd) {
+          final stepIdx = i ~/ 2;
+          final done = stepIdx < activeIdx;
+          return Expanded(
+            child: Container(
+              height: 2,
+              color: done ? Colors.amber : Colors.grey[700],
+            ),
+          );
+        }
+        final stepIdx = i ~/ 2;
+        final (label, _) = steps[stepIdx];
+        final active = stepIdx == activeIdx;
+        final done   = stepIdx < activeIdx;
+        return Column(
+          children: [
+            Container(
+              width: 28,
+              height: 28,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: active
+                    ? Colors.amber
+                    : done
+                        ? Colors.amber.withOpacity(0.4)
+                        : Colors.grey[800],
+                border: Border.all(
+                  color: active || done ? Colors.amber : Colors.grey,
+                  width: 1.5,
+                ),
+              ),
+              child: Icon(
+                done ? Icons.check : Icons.circle,
+                size: done ? 16 : 8,
+                color: active || done ? Colors.black : Colors.grey,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(label,
+                style: TextStyle(
+                  fontSize: 10,
+                  color: active ? Colors.amber : Colors.grey,
+                  fontWeight:
+                      active ? FontWeight.bold : FontWeight.normal,
+                )),
+          ],
+        );
+      }),
+    );
+  }
+
+  Widget _resultBanner(BuildContext context, AppState state) {
+    final event = state.chargeEvent;
+    final isOver  = event & kEventOver  != 0;
+    final isUnder = event & kEventUnder != 0;
+    final (text, color) = isOver
+        ? ('OVER CHARGE', Colors.red)
+        : isUnder
+            ? ('UNDER CHARGE', Colors.orange)
+            : ('OK', Colors.green);
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 16),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.15),
+        border: Border.all(color: color),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(
+            isOver ? Icons.arrow_upward :
+            isUnder ? Icons.arrow_downward : Icons.check_circle,
+            color: color, size: 20,
+          ),
+          const SizedBox(width: 8),
+          Text(text,
+              style: TextStyle(
+                  color: color,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16)),
+          if (!isOver && !isUnder) ...[
+            const SizedBox(width: 8),
+            Text(state.settledWeight,
+                style: TextStyle(color: color, fontSize: 14)),
+            Text(' gr', style: TextStyle(color: color.withOpacity(0.7), fontSize: 14)),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _historyTable(BuildContext context, AppState state) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text('History',
+            style: Theme.of(context)
+                .textTheme
+                .titleSmall
+                ?.copyWith(color: Colors.grey)),
+        const SizedBox(height: 6),
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: DataTable(
+            headingRowHeight: 32,
+            dataRowMinHeight: 28,
+            dataRowMaxHeight: 32,
+            columnSpacing: 16,
+            headingTextStyle: const TextStyle(
+                fontSize: 11, color: Colors.grey, fontWeight: FontWeight.bold),
+            dataTextStyle: const TextStyle(fontSize: 12),
+            columns: const [
+              DataColumn(label: Text('#')),
+              DataColumn(label: Text('Target'), numeric: true),
+              DataColumn(label: Text('Weight'), numeric: true),
+              DataColumn(label: Text('Error'), numeric: true),
+              DataColumn(label: Text('Time'), numeric: true),
+              DataColumn(label: Text('Result')),
+            ],
+            rows: state.chargeHistory.asMap().entries.map((e) {
+              final idx = e.key;
+              final r   = e.value;
+              final color = r.result == 'OK'
+                  ? Colors.green
+                  : r.result == 'OVER'
+                      ? Colors.red
+                      : Colors.orange;
+              return DataRow(cells: [
+                DataCell(Text('${state.chargeHistory.length - idx}')),
+                DataCell(Text(r.target.toStringAsFixed(3))),
+                DataCell(Text(r.weight)),
+                DataCell(Text(
+                  '${r.error >= 0 ? '+' : ''}${r.error.toStringAsFixed(3)}',
+                  style: TextStyle(
+                      color: r.error.abs() < 0.01 ? Colors.green : Colors.orange),
+                )),
+                DataCell(Text('${r.time} s')),
+                DataCell(Text(r.result,
+                    style: TextStyle(
+                        color: color, fontWeight: FontWeight.bold))),
+              ]);
+            }).toList(),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildDrawer(BuildContext context, AppState state) {
     return Drawer(
       child: ListView(
         padding: EdgeInsets.zero,
@@ -198,9 +474,17 @@ class _HomeScreenState extends State<HomeScreen> {
             decoration: BoxDecoration(
               color: Theme.of(context).colorScheme.primaryContainer,
             ),
-            child: const Text(
-              'OpenTrickler',
-              style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                const Text('OpenTrickler',
+                    style:
+                        TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+                if (state.profileName.isNotEmpty)
+                  Text(state.profileName,
+                      style: const TextStyle(color: Colors.amber)),
+              ],
             ),
           ),
           ListTile(
@@ -208,13 +492,7 @@ class _HomeScreenState extends State<HomeScreen> {
             title: const Text('Profiles'),
             onTap: () {
               Navigator.pop(context);
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) =>
-                      ProfilesScreen(bleService: widget.bleService),
-                ),
-              );
+              _openProfiles(context);
             },
           ),
           ListTile(
@@ -242,42 +520,29 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _stateChip(AppState state) {
-    final labels = {
-      ChargeState.exit: ('Ready', Colors.grey),
-      ChargeState.waitForZero: ('Waiting...', Colors.yellow),
-      ChargeState.charging: ('Charging', Colors.amber),
-      ChargeState.removeCup: ('Remove cup ✓', Colors.green),
-      ChargeState.returnCup: ('Place new cup', Colors.blue),
-    };
-    final (label, color) = labels[state.chargeState]!;
-    return Chip(
-      label: Text(label),
-      backgroundColor: color.withOpacity(0.2),
-      side: BorderSide(color: color),
-    );
-  }
+  // ---------------------------------------------------------------------------
+  // Helpers
+  // ---------------------------------------------------------------------------
 
-  Color _weightColor(AppState state) {
-    switch (state.chargeState) {
-      case ChargeState.exit:
-        return Colors.white70;
-      case ChargeState.waitForZero:
-        return Colors.yellow;
-      case ChargeState.charging:
-        return Colors.amber;
-      case ChargeState.removeCup:
-        return Colors.green;
-      case ChargeState.returnCup:
-        return Colors.lightBlue;
-    }
+  Color _weightColor(AppState state) => switch (state.chargeState) {
+        ChargeState.exit        => Colors.white70,
+        ChargeState.waitForZero => Colors.yellow,
+        ChargeState.charging    => Colors.amber,
+        ChargeState.removeCup   => Colors.green,
+        ChargeState.returnCup   => Colors.lightBlue,
+      };
+
+  Color _progressColor(AppState state, double frac) {
+    if (frac >= 1.0) return Colors.red;
+    if (frac >= 0.9) return Colors.orange;
+    return Colors.amber;
   }
 
   Widget _stepBtn(IconData icon, VoidCallback onTap) => IconButton(
-        icon: Icon(icon, size: 20),
+        icon: Icon(icon, size: 22),
         onPressed: onTap,
         padding: EdgeInsets.zero,
-        constraints: const BoxConstraints(minWidth: 32),
+        constraints: const BoxConstraints(minWidth: 36),
       );
 
   void _adjustTarget(double delta) {
@@ -296,4 +561,13 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _abort() => widget.bleService.abortCharging();
+
+  void _openProfiles(BuildContext context) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ProfilesScreen(bleService: widget.bleService),
+      ),
+    );
+  }
 }
