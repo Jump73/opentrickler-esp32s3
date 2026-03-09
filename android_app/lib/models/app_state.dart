@@ -242,8 +242,22 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  bool profileConfigError = false;
+
+  void clearProfileConfigError() {
+    profileConfigError = false;
+  }
+
   void updateProfileDetails(Map<String, dynamic> j) {
+    if (j.containsKey('error')) {
+      profileConfigError = true;
+      notifyListeners();
+      return;
+    }
+    profileConfigError = false;
     currentProfileDetails = ProfileDetails.fromJson(j);
+    // ESP32 selects the profile when profile_config is requested — mirror that here
+    currentProfileIndex = currentProfileDetails!.index;
     notifyListeners();
   }
 

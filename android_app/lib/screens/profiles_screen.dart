@@ -102,6 +102,10 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
   @override
   void initState() {
     super.initState();
+    // Clear any previous error before requesting new profile
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) context.read<AppState>().clearProfileConfigError();
+    });
     widget.bleService.requestProfileConfig(widget.profileIndex);
   }
 
@@ -133,9 +137,16 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
-    final details = state.currentProfileDetails;
-    if (!_loaded && details != null && details.index == widget.profileIndex) {
-      _loadFrom(details);
+    if (!_loaded) {
+      if (state.profileConfigError) {
+        // Profile doesn't exist on device — load with empty defaults
+        _loadFrom(ProfileDetails(index: widget.profileIndex));
+      } else {
+        final details = state.currentProfileDetails;
+        if (details != null && details.index == widget.profileIndex) {
+          _loadFrom(details);
+        }
+      }
     }
 
     return Scaffold(
