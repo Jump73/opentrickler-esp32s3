@@ -102,6 +102,7 @@ static charge_mode_config_t charge_mode_config = {
     .fine_trickle_threshold = 0.2f,
     .set_point_sd_margin = 0.02f,
     .set_point_mean_margin = 0.02f,
+    .result_tolerance = 0.02f,           // Default ±0.02 gn for OK/OVER/UNDER
 
     .decimal_places = DP_2,
 
@@ -571,13 +572,13 @@ static void do_wait_for_complete(void)
         float final_weight = runtime_state.current_weight;
         runtime_unlock();
         float final_error = target - final_weight;
-        if (final_error <= -charge_mode_config.fine_stop_threshold) {
+        if (final_error <= -charge_mode_config.result_tolerance) {
             runtime_lock();
             runtime_state.charge_mode_event = CHARGE_MODE_EVENT_OVER_CHARGE;
             runtime_unlock();
             charge_mode_set_led(charge_mode_config.neopixel_over_charge_colour);
             ESP_LOGW(TAG, "POST-SETTLE: OVER CHARGE weight=%.4f error=%.4f", final_weight, final_error);
-        } else if (final_error >= charge_mode_config.fine_stop_threshold) {
+        } else if (final_error >= charge_mode_config.result_tolerance) {
             runtime_lock();
             runtime_state.charge_mode_event = CHARGE_MODE_EVENT_UNDER_CHARGE;
             runtime_unlock();

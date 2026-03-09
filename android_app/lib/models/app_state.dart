@@ -109,7 +109,7 @@ class AppState extends ChangeNotifier {
   double coarseStopThreshold = 1.0;
   double fineStopThreshold = 0.1;
   double fineTrickleThreshold = 0.2;
-  double weightTolerance = 0.02;
+  double resultTolerance = 0.02;
 
   // --- System info ---
   String deviceId = '';
@@ -168,8 +168,8 @@ class AppState extends ChangeNotifier {
   void updateChargeConfig(Map<String, dynamic> j) {
     coarseStopThreshold  = (j['c5']  as num?)?.toDouble() ?? coarseStopThreshold;
     fineStopThreshold    = (j['c6']  as num?)?.toDouble() ?? fineStopThreshold;
-    weightTolerance      = (j['c8']  as num?)?.toDouble() ?? weightTolerance;
     fineTrickleThreshold = (j['c13'] as num?)?.toDouble() ?? fineTrickleThreshold;
+    resultTolerance      = (j['c14'] as num?)?.toDouble() ?? resultTolerance;
     notifyListeners();
   }
 

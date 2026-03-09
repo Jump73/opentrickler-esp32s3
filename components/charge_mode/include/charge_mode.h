@@ -48,6 +48,7 @@ typedef struct {
     float fine_trickle_threshold;
     float set_point_sd_margin;
     float set_point_mean_margin;
+    float result_tolerance;         // ±tolerance for OK/OVER/UNDER result (default 0.02)
 
     // Display settings
     decimal_places_t decimal_places;

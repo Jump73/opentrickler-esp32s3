@@ -149,9 +149,10 @@ class _ChargeTab extends StatefulWidget {
 }
 
 class _ChargeTabState extends State<_ChargeTab> {
-  final _coarse  = TextEditingController();
-  final _fine    = TextEditingController();
-  final _trickle = TextEditingController();
+  final _coarse    = TextEditingController();
+  final _fine      = TextEditingController();
+  final _trickle   = TextEditingController();
+  final _tolerance = TextEditingController();
   bool _loaded = false;
 
   @override
@@ -159,6 +160,7 @@ class _ChargeTabState extends State<_ChargeTab> {
     _coarse.dispose();
     _fine.dispose();
     _trickle.dispose();
+    _tolerance.dispose();
     super.dispose();
   }
 
@@ -167,9 +169,10 @@ class _ChargeTabState extends State<_ChargeTab> {
     final state = context.watch<AppState>();
     if (!_loaded && state.coarseStopThreshold > 0) {
       _loaded = true;
-      _coarse.text  = state.coarseStopThreshold.toStringAsFixed(2);
-      _fine.text    = state.fineStopThreshold.toStringAsFixed(2);
-      _trickle.text = state.fineTrickleThreshold.toStringAsFixed(2);
+      _coarse.text    = state.coarseStopThreshold.toStringAsFixed(2);
+      _fine.text      = state.fineStopThreshold.toStringAsFixed(3);
+      _trickle.text   = state.fineTrickleThreshold.toStringAsFixed(2);
+      _tolerance.text = state.resultTolerance.toStringAsFixed(2);
     }
 
     return Padding(
@@ -179,9 +182,11 @@ class _ChargeTabState extends State<_ChargeTab> {
         children: [
           _numField('Coarse stop threshold (gn)', _coarse),
           const SizedBox(height: 16),
-          _numField('Weight tolerance ± (gn)', _fine),
+          _numField('Fine stop threshold (gn)', _fine),
           const SizedBox(height: 16),
           _numField('Fine trickle threshold (gn)', _trickle),
+          const SizedBox(height: 16),
+          _numField('Result tolerance ± (gn)', _tolerance),
           const SizedBox(height: 24),
           FilledButton(
             onPressed: _apply,
@@ -204,10 +209,10 @@ class _ChargeTabState extends State<_ChargeTab> {
 
   void _apply() {
     widget.bleService.saveChargeConfig(
-      coarseStop:  double.tryParse(_coarse.text)  ?? 1.0,
-      fineStop:    double.tryParse(_fine.text)     ?? 0.1,
-      fineTrickle: double.tryParse(_trickle.text) ?? 0.2,
-      tolerance:   double.tryParse(_fine.text)    ?? 0.1,
+      coarseStop:       double.tryParse(_coarse.text)    ?? 1.0,
+      fineStop:         double.tryParse(_fine.text)      ?? 0.03,
+      fineTrickle:      double.tryParse(_trickle.text)   ?? 0.2,
+      resultTolerance:  double.tryParse(_tolerance.text) ?? 0.02,
     );
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Charge config saved')),

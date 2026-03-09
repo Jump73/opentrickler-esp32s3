@@ -255,6 +255,7 @@ static void handle_charge_mode_config(const cJSON *j)
     if (json_has_key(j, "c11")) { config.precharge_time_ms       = (uint32_t)json_get_int(j, "c11", (int)config.precharge_time_ms); config_changed = true; }
     if (json_has_key(j, "c12")) { config.precharge_speed_rps     = (float)json_get_double(j, "c12", config.precharge_speed_rps);    config_changed = true; }
     if (json_has_key(j, "c13")) { config.fine_trickle_threshold  = (float)json_get_double(j, "c13", config.fine_trickle_threshold); config_changed = true; }
+    if (json_has_key(j, "c14")) { config.result_tolerance        = (float)json_get_double(j, "c14", config.result_tolerance);        config_changed = true; }
 
     if (save_to_nvs && config_changed) {
         charge_mode_save_config(&config);
@@ -271,6 +272,7 @@ static void handle_charge_mode_config(const cJSON *j)
     cJSON_AddNumberToObject(resp, "c11", (double)config.precharge_time_ms);
     cJSON_AddNumberToObject(resp, "c12", config.precharge_speed_rps);
     cJSON_AddNumberToObject(resp, "c13", config.fine_trickle_threshold);
+    cJSON_AddNumberToObject(resp, "c14", config.result_tolerance);
     send_json(resp);
     cJSON_Delete(resp);
 }
