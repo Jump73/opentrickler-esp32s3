@@ -571,7 +571,10 @@ static void do_wait_for_complete(void)
         runtime_lock();
         float final_weight = runtime_state.current_weight;
         runtime_unlock();
-        float final_error = target - final_weight;
+        // Round error to 0.001 gn (scale resolution) to avoid float rounding
+        // artefacts where e.g. 42.02f is stored as 42.020000457..., causing
+        // target-weight to be slightly more than 0.02 and triggering OVER/UNDER.
+        float final_error = roundf((target - final_weight) * 1000.0f) / 1000.0f;
         if (final_error < -charge_mode_config.result_tolerance) {
             runtime_lock();
             runtime_state.charge_mode_event = CHARGE_MODE_EVENT_OVER_CHARGE;
