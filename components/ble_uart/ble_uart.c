@@ -106,6 +106,16 @@ static void start_advertising(void)
         return;
     }
 
+    // Scan response: NUS service UUID so phone can filter by service UUID
+    struct ble_hs_adv_fields rsp = {0};
+    rsp.uuids128             = &s_nus_svc_uuid;
+    rsp.num_uuids128         = 1;
+    rsp.uuids128_is_complete = 1;
+    rc = ble_gap_adv_rsp_set_fields(&rsp);
+    if (rc != 0) {
+        ESP_LOGW(TAG, "adv rsp set fields failed: %d (continuing)", rc);
+    }
+
     struct ble_gap_adv_params params = {
         .conn_mode  = BLE_GAP_CONN_MODE_UND,
         .disc_mode  = BLE_GAP_DISC_MODE_GEN,

@@ -23,7 +23,7 @@ class BleService {
   Future<void> startScan() async {
     if (FlutterBluePlus.isScanningNow) return;
     await FlutterBluePlus.startScan(
-      withServices: [Guid(_serviceUuid)],
+      withNames: ['OpenTrickler'],
       timeout: const Duration(seconds: 20),
     );
   }
