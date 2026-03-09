@@ -209,7 +209,7 @@ class _HomeScreenState extends State<HomeScreen> {
               fit: BoxFit.scaleDown,
               alignment: Alignment.centerLeft,
               child: Text(
-                state.currentWeight,
+                _fmt(state.currentWeight),
                 style: TextStyle(
                   fontSize: 52,
                   fontWeight: FontWeight.bold,
@@ -256,7 +256,7 @@ class _HomeScreenState extends State<HomeScreen> {
             Text(
               (state.chargeState == ChargeState.removeCup ||
                       state.chargeState == ChargeState.returnCup)
-                  ? 'Settled: ${state.settledWeight} gn'
+                  ? 'Settled: ${_fmt(state.settledWeight)} gn'
                   : 'Target: ${state.targetWeight.toStringAsFixed(2)} gn',
               style: Theme.of(context)
                   .textTheme
@@ -398,7 +398,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   fontSize: 16)),
           if (!isOver && !isUnder) ...[
             const SizedBox(width: 8),
-            Text(state.settledWeight,
+            Text(_fmt(state.settledWeight),
                 style: TextStyle(color: color, fontSize: 14)),
             Text(' gn', style: TextStyle(color: color.withOpacity(0.7), fontSize: 14)),
           ],
@@ -446,7 +446,7 @@ class _HomeScreenState extends State<HomeScreen> {
               return DataRow(cells: [
                 DataCell(Text('${state.chargeHistory.length - idx}')),
                 DataCell(Text(r.target.toStringAsFixed(2))),
-                DataCell(Text(r.weight)),
+                DataCell(Text(_fmt(r.weight))),
                 DataCell(Text(
                   '${r.error >= 0 ? '+' : ''}${r.error.toStringAsFixed(2)}',
                   style: TextStyle(
@@ -522,6 +522,12 @@ class _HomeScreenState extends State<HomeScreen> {
   // ---------------------------------------------------------------------------
   // Helpers
   // ---------------------------------------------------------------------------
+
+  // Reformat weight string from ESP32 (always "X.XXX") to 2 decimal places.
+  String _fmt(String w) {
+    final v = double.tryParse(w);
+    return v != null ? v.toStringAsFixed(2) : w;
+  }
 
   Color _weightColor(AppState state) => switch (state.chargeState) {
         ChargeState.exit        => Colors.white70,
