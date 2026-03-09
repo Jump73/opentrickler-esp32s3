@@ -204,11 +204,13 @@ class BleService {
     required double coarseStop,
     required double fineStop,
     required double fineTrickle,
+    required double tolerance,
   }) =>
       send({
         'cmd': 'charge_mode_config',
         'c5': coarseStop,
         'c6': fineStop,
+        'c8': tolerance,
         'c13': fineTrickle,
         'ee': true,
       });
