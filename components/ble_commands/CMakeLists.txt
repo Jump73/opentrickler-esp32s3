@@ -4,6 +4,6 @@ idf_component_register(
     REQUIRES
         ble_uart
         charge_mode profile scale system_control flow_model
-        lvgl_port ui_screens
+        lvgl_port ui_screens motors neopixel_led cleanup_mode
         json log
 )

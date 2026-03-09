@@ -8,6 +8,9 @@
 #include "flow_model.h"
 #include "lvgl_port.h"
 #include "ui_screens.h"
+#include "motors.h"
+#include "neopixel_led.h"
+#include "cleanup_mode.h"
 
 #include "cJSON.h"
 #include "esp_log.h"
@@ -361,6 +364,150 @@ static void handle_system_control(const cJSON *j)
     cJSON_Delete(resp);
 }
 
+static void handle_motor_config(const cJSON *j)
+{
+    int mt_int = json_get_int(j, "mt", -1);
+    if (mt_int < 0 || mt_int > 1) {
+        cJSON *err = cJSON_CreateObject();
+        cJSON_AddStringToObject(err, "cmd", "motor_config");
+        cJSON_AddStringToObject(err, "error", "missing mt (0=coarse,1=fine)");
+        send_json(err);
+        cJSON_Delete(err);
+        return;
+    }
+    motor_type_t mt = (motor_type_t)mt_int;
+
+    motor_config_t config = {0};
+    motors_get_config(mt, &config);
+
+    bool config_changed = false;
+    bool save_to_nvs = json_get_bool(j, "ee", false);
+
+    if (json_has_key(j, "m0")) { config.angular_acceleration      = (float)json_get_double(j, "m0", config.angular_acceleration);           config_changed = true; }
+    if (json_has_key(j, "m1")) { config.full_steps_per_rotation   = (uint32_t)json_get_int(j, "m1", (int)config.full_steps_per_rotation);   config_changed = true; }
+    if (json_has_key(j, "m2")) { config.current_ma                = (uint16_t)json_get_int(j, "m2", (int)config.current_ma);                config_changed = true; }
+    if (json_has_key(j, "m3")) { config.microsteps                = (uint16_t)json_get_int(j, "m3", (int)config.microsteps);                config_changed = true; }
+    if (json_has_key(j, "m4")) { config.max_speed_rps             = (uint16_t)json_get_int(j, "m4", (int)config.max_speed_rps);             config_changed = true; }
+    if (json_has_key(j, "m5")) { config.r_sense                   = (uint16_t)json_get_int(j, "m5", (int)config.r_sense);                   config_changed = true; }
+    if (json_has_key(j, "m6")) { config.min_speed_rps             = (float)json_get_double(j, "m6", config.min_speed_rps);                  config_changed = true; }
+    if (json_has_key(j, "m7")) { config.gear_ratio                = (float)json_get_double(j, "m7", config.gear_ratio);                     config_changed = true; }
+    if (json_has_key(j, "m8")) { config.inverted_enable           = json_get_bool(j, "m8", config.inverted_enable);                         config_changed = true; }
+    if (json_has_key(j, "m9")) { config.inverted_direction        = json_get_bool(j, "m9", config.inverted_direction);                      config_changed = true; }
+
+    if (save_to_nvs && config_changed) {
+        motors_save_config(mt, &config);
+    }
+
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddStringToObject(resp, "cmd", "motor_config");
+    cJSON_AddNumberToObject(resp, "mt", mt_int);
+    cJSON_AddNumberToObject(resp, "m0", config.angular_acceleration);
+    cJSON_AddNumberToObject(resp, "m1", (double)config.full_steps_per_rotation);
+    cJSON_AddNumberToObject(resp, "m2", (double)config.current_ma);
+    cJSON_AddNumberToObject(resp, "m3", (double)config.microsteps);
+    cJSON_AddNumberToObject(resp, "m4", (double)config.max_speed_rps);
+    cJSON_AddNumberToObject(resp, "m5", (double)config.r_sense);
+    cJSON_AddNumberToObject(resp, "m6", config.min_speed_rps);
+    cJSON_AddNumberToObject(resp, "m7", config.gear_ratio);
+    cJSON_AddBoolToObject  (resp, "m8", config.inverted_enable);
+    cJSON_AddBoolToObject  (resp, "m9", config.inverted_direction);
+    send_json(resp);
+    cJSON_Delete(resp);
+}
+
+static void handle_neopixel_config(const cJSON *j)
+{
+    neopixel_led_config_t config = {0};
+    neopixel_led_get_config(&config);
+
+    bool config_changed = false;
+    bool save_to_nvs = json_get_bool(j, "ee", false);
+
+    if (json_has_key(j, "bl")) { config.default_led_colours.mini12864_backlight_colour = (uint32_t)json_get_int(j, "bl", (int)config.default_led_colours.mini12864_backlight_colour); config_changed = true; }
+    if (json_has_key(j, "l1")) { config.default_led_colours.led1_colour                = (uint32_t)json_get_int(j, "l1", (int)config.default_led_colours.led1_colour);                config_changed = true; }
+    if (json_has_key(j, "l2")) { config.default_led_colours.led2_colour                = (uint32_t)json_get_int(j, "l2", (int)config.default_led_colours.led2_colour);                config_changed = true; }
+    if (json_has_key(j, "l3")) { config.pwm_out_led_chain_count                        = (neopixel_led_chain_count_t)json_get_int(j, "l3", (int)config.pwm_out_led_chain_count);     config_changed = true; }
+    if (json_has_key(j, "l4")) { config.pwm_out_led_is_rgbw                            = json_get_bool(j, "l4", config.pwm_out_led_is_rgbw);                                         config_changed = true; }
+    if (json_has_key(j, "l5")) { config.pwm_out_led_colour_order                       = (neopixel_colour_order_t)json_get_int(j, "l5", (int)config.pwm_out_led_colour_order);       config_changed = true; }
+
+    if (config_changed) {
+        if (save_to_nvs) {
+            neopixel_led_save_config(&config);
+        }
+        neopixel_led_set_colour(
+            config.default_led_colours.mini12864_backlight_colour,
+            config.default_led_colours.led1_colour,
+            config.default_led_colours.led2_colour
+        );
+    }
+
+    neopixel_led_get_config(&config);
+
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddStringToObject(resp, "cmd", "neopixel_config");
+    cJSON_AddNumberToObject(resp, "bl", (double)config.default_led_colours.mini12864_backlight_colour);
+    cJSON_AddNumberToObject(resp, "l1", (double)config.default_led_colours.led1_colour);
+    cJSON_AddNumberToObject(resp, "l2", (double)config.default_led_colours.led2_colour);
+    cJSON_AddNumberToObject(resp, "l3", (double)config.pwm_out_led_chain_count);
+    cJSON_AddBoolToObject  (resp, "l4", config.pwm_out_led_is_rgbw);
+    cJSON_AddNumberToObject(resp, "l5", (double)config.pwm_out_led_colour_order);
+    send_json(resp);
+    cJSON_Delete(resp);
+}
+
+static void handle_cleanup_mode_state(const cJSON *j)
+{
+    cleanup_mode_runtime_state_t rt = {0};
+    cleanup_mode_get_state(&rt);
+
+    if (json_has_key(j, "s0")) {
+        cleanup_mode_state_t new_state = (cleanup_mode_state_t)json_get_int(j, "s0", (int)rt.cleanup_mode_state);
+        cleanup_mode_set_state(new_state);
+        rt.cleanup_mode_state = new_state;
+    }
+
+    if (json_has_key(j, "s1")) {
+        float speed = (float)json_get_double(j, "s1", rt.trickler_speed);
+        cleanup_mode_set_speed(speed);
+        rt.trickler_speed = speed;
+    }
+
+    cleanup_mode_get_state(&rt);
+
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddStringToObject(resp, "cmd", "cleanup_mode_state");
+    cJSON_AddNumberToObject(resp, "s0", (int)rt.cleanup_mode_state);
+    cJSON_AddNumberToObject(resp, "s1", rt.trickler_speed);
+    send_json(resp);
+    cJSON_Delete(resp);
+}
+
+static void handle_display_config(const cJSON *j)
+{
+    mini_12864_config_t config = {0};
+    lvgl_port_get_mini12864_config(&config);
+
+    bool config_changed = false;
+    bool save_to_nvs = json_get_bool(j, "ee", false);
+
+    if (json_has_key(j, "b0")) { config.inverted_encoder  = json_get_bool(j, "b0", config.inverted_encoder);                  config_changed = true; }
+    if (json_has_key(j, "b1")) { config.display_rotation  = (uint8_t)json_get_int(j, "b1", config.display_rotation);          config_changed = true; }
+
+    if (config_changed) {
+        lvgl_port_set_mini12864_config(&config, save_to_nvs);
+    }
+
+    // Re-read after apply (in case normalisation occurred)
+    lvgl_port_get_mini12864_config(&config);
+
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddStringToObject(resp, "cmd", "display_config");
+    cJSON_AddBoolToObject  (resp, "b0", config.inverted_encoder);
+    cJSON_AddNumberToObject(resp, "b1", config.display_rotation);
+    send_json(resp);
+    cJSON_Delete(resp);
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -407,6 +554,10 @@ void ble_commands_handle(const uint8_t *data, size_t len)
     else if (strcmp(cmd, "scale_config")       == 0) handle_scale_config(j);
     else if (strcmp(cmd, "scale_action")       == 0) handle_scale_action(j);
     else if (strcmp(cmd, "system_control")     == 0) handle_system_control(j);
+    else if (strcmp(cmd, "motor_config")       == 0) handle_motor_config(j);
+    else if (strcmp(cmd, "display_config")     == 0) handle_display_config(j);
+    else if (strcmp(cmd, "neopixel_config")    == 0) handle_neopixel_config(j);
+    else if (strcmp(cmd, "cleanup_mode_state") == 0) handle_cleanup_mode_state(j);
     else ESP_LOGW(TAG, "Unknown cmd: %s", cmd);
 
     cJSON_Delete(j);

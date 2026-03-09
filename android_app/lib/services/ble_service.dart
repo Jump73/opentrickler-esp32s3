@@ -127,6 +127,18 @@ class BleService {
         case 'charge_mode_config':
           _state.updateChargeConfig(j);
           break;
+        case 'neopixel_config':
+          _state.updateNeopixelConfig(j);
+          break;
+        case 'cleanup_mode_state':
+          _state.updateCleanupState(j);
+          break;
+        case 'motor_config':
+          _state.updateMotorConfig(j);
+          break;
+        case 'display_config':
+          _state.updateDisplayConfig(j);
+          break;
         case 'scale_config':
           _state.updateScaleConfig(j);
           break;
@@ -205,13 +217,41 @@ class BleService {
     required double fineStop,
     required double fineTrickle,
     required double resultTolerance,
+    required bool prechargeEnable,
+    required int prechargeTimeMs,
+    required double prechargeSpeedRps,
   }) =>
       send({
         'cmd': 'charge_mode_config',
         'c5': coarseStop,
         'c6': fineStop,
+        'c10': prechargeEnable,
+        'c11': prechargeTimeMs,
+        'c12': prechargeSpeedRps,
         'c13': fineTrickle,
         'c14': resultTolerance,
+        'ee': true,
+      });
+
+  Future<void> requestNeopixelConfig() =>
+      send({'cmd': 'neopixel_config'});
+
+  Future<void> saveNeopixelConfig({
+    required int backlight,
+    required int led1,
+    required int led2,
+    required int chainCount,
+    required bool isRgbw,
+    required int colorOrder,
+  }) =>
+      send({
+        'cmd': 'neopixel_config',
+        'bl': backlight,
+        'l1': led1,
+        'l2': led2,
+        'l3': chainCount,
+        'l4': isRgbw,
+        'l5': colorOrder,
         'ee': true,
       });
 
@@ -224,6 +264,39 @@ class BleService {
   Future<void> zeroScale() =>
       send({'cmd': 'scale_action', 'a0': 1});
 
+  Future<void> requestMotorConfig(int motorType) =>
+      send({'cmd': 'motor_config', 'mt': motorType});
+
+  Future<void> saveMotorConfig(int motorType, MotorConfig c) => send({
+        'cmd': 'motor_config',
+        'mt': motorType,
+        'm0': c.angularAcceleration,
+        'm1': c.fullStepsPerRotation,
+        'm2': c.currentMa,
+        'm3': c.microsteps,
+        'm4': c.maxSpeedRps,
+        'm5': c.rSense,
+        'm6': c.minSpeedRps,
+        'm7': c.gearRatio,
+        'm8': c.invertedEnable,
+        'm9': c.invertedDirection,
+        'ee': true,
+      });
+
+  Future<void> requestDisplayConfig() =>
+      send({'cmd': 'display_config'});
+
+  Future<void> saveDisplayConfig({
+    required bool invertedEncoder,
+    required int rotation,
+  }) =>
+      send({
+        'cmd': 'display_config',
+        'b0': invertedEncoder,
+        'b1': rotation,
+        'ee': true,
+      });
+
   Future<void> requestSystemInfo() =>
       send({'cmd': 'system_control'});
 
@@ -232,6 +305,12 @@ class BleService {
 
   Future<void> eraseNvs() =>
       send({'cmd': 'system_control', 's6': true});
+
+  Future<void> setCleanupMode(bool active) =>
+      send({'cmd': 'cleanup_mode_state', 's0': active ? 1 : 0});
+
+  Future<void> setCleanupSpeed(double speed) =>
+      send({'cmd': 'cleanup_mode_state', 's1': speed});
 
   void dispose() {
     _stopPolling();

@@ -7,6 +7,7 @@ import '../services/ble_service.dart';
 import '../models/app_state.dart';
 import 'profiles_screen.dart';
 import 'settings_screen.dart';
+import 'cleanup_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   final BleService bleService;
@@ -537,6 +538,20 @@ class _HomeScreenState extends State<HomeScreen> {
                 MaterialPageRoute(
                   builder: (_) =>
                       SettingsScreen(bleService: widget.bleService),
+                ),
+              );
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.settings_backup_restore),
+            title: const Text('Cleanup Mode'),
+            onTap: () {
+              Navigator.pop(context);
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) =>
+                      CleanupScreen(bleService: widget.bleService),
                 ),
               );
             },

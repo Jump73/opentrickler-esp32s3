@@ -76,6 +76,59 @@ class ProfileDetails {
       );
 }
 
+class MotorConfig {
+  double angularAcceleration;
+  int fullStepsPerRotation;
+  int currentMa;
+  int microsteps;
+  int maxSpeedRps;
+  int rSense;
+  double minSpeedRps;
+  double gearRatio;
+  bool invertedEnable;
+  bool invertedDirection;
+
+  MotorConfig({
+    this.angularAcceleration = 10.0,
+    this.fullStepsPerRotation = 200,
+    this.currentMa = 800,
+    this.microsteps = 16,
+    this.maxSpeedRps = 10,
+    this.rSense = 110,
+    this.minSpeedRps = 0.1,
+    this.gearRatio = 1.0,
+    this.invertedEnable = false,
+    this.invertedDirection = false,
+  });
+
+  factory MotorConfig.coarseDefaults() => MotorConfig(
+        currentMa: 800,
+        maxSpeedRps: 10,
+        minSpeedRps: 0.1,
+        angularAcceleration: 10.0,
+      );
+
+  factory MotorConfig.fineDefaults() => MotorConfig(
+        currentMa: 600,
+        maxSpeedRps: 5,
+        minSpeedRps: 0.05,
+        angularAcceleration: 5.0,
+      );
+
+  factory MotorConfig.fromJson(Map<String, dynamic> j) => MotorConfig(
+        angularAcceleration:   (j['m0'] as num?)?.toDouble() ?? 10.0,
+        fullStepsPerRotation:  (j['m1'] as num?)?.toInt()    ?? 200,
+        currentMa:             (j['m2'] as num?)?.toInt()    ?? 800,
+        microsteps:            (j['m3'] as num?)?.toInt()    ?? 16,
+        maxSpeedRps:           (j['m4'] as num?)?.toInt()    ?? 10,
+        rSense:                (j['m5'] as num?)?.toInt()    ?? 110,
+        minSpeedRps:           (j['m6'] as num?)?.toDouble() ?? 0.1,
+        gearRatio:             (j['m7'] as num?)?.toDouble() ?? 1.0,
+        invertedEnable:        j['m8'] as bool?              ?? false,
+        invertedDirection:     j['m9'] as bool?              ?? false,
+      );
+}
+
 class AppState extends ChangeNotifier {
   // --- Connection ---
   bool isConnected = false;
@@ -110,10 +163,41 @@ class AppState extends ChangeNotifier {
   double fineStopThreshold = 0.1;
   double fineTrickleThreshold = 0.2;
   double resultTolerance = 0.02;
+  bool prechargeEnable = false;
+  int prechargeTimeMs = 500;
+  double prechargeSpeedRps = 1.0;
+
+  // --- NeoPixel config ---
+  int neopixelBacklight = 0x0F0F0F;
+  int neopixelLed1 = 0x00FF00;
+  int neopixelLed2 = 0x00FF00;
+  int neopixelChainCount = 1;
+  bool neopixelIsRgbw = false;
+  int neopixelColorOrder = 0; // 0=RGB, 1=GRB
+
+  // --- Cleanup mode ---
+  bool cleanupActive = false;
+  double cleanupSpeed = 0.0;
+
+  // --- Motor config ---
+  MotorConfig coarseMotor = MotorConfig.coarseDefaults();
+  MotorConfig fineMotor = MotorConfig.fineDefaults();
+
+  // --- Display config ---
+  bool displayInvertedEncoder = false;
+  int displayRotation = 0; // 0=0°, 2=180°
 
   // --- System info ---
   String deviceId = '';
   String firmwareVersion = '';
+
+  // --- Loaded flags (true only after first real BLE response) ---
+  bool scaleConfigLoaded    = false;
+  bool chargeConfigLoaded   = false;
+  bool neopixelConfigLoaded = false;
+  bool displayConfigLoaded  = false;
+  bool coarseMotorLoaded    = false;
+  bool fineMotorLoaded      = false;
 
   // -------------------------------------------------------------------
 
@@ -160,8 +244,9 @@ class AppState extends ChangeNotifier {
   }
 
   void updateScaleConfig(Map<String, dynamic> j) {
-    scaleDriver   = (j['s0'] as num?)?.toInt() ?? scaleDriver;
-    scaleBaudrate = (j['s1'] as num?)?.toInt() ?? scaleBaudrate;
+    scaleDriver        = (j['s0'] as num?)?.toInt() ?? scaleDriver;
+    scaleBaudrate      = (j['s1'] as num?)?.toInt() ?? scaleBaudrate;
+    scaleConfigLoaded  = true;
     notifyListeners();
   }
 
@@ -170,6 +255,46 @@ class AppState extends ChangeNotifier {
     fineStopThreshold    = (j['c6']  as num?)?.toDouble() ?? fineStopThreshold;
     fineTrickleThreshold = (j['c13'] as num?)?.toDouble() ?? fineTrickleThreshold;
     resultTolerance      = (j['c14'] as num?)?.toDouble() ?? resultTolerance;
+    prechargeEnable      = j['c10']  as bool?             ?? prechargeEnable;
+    prechargeTimeMs      = (j['c11'] as num?)?.toInt()    ?? prechargeTimeMs;
+    prechargeSpeedRps    = (j['c12'] as num?)?.toDouble() ?? prechargeSpeedRps;
+    chargeConfigLoaded   = true;
+    notifyListeners();
+  }
+
+  void updateNeopixelConfig(Map<String, dynamic> j) {
+    neopixelBacklight     = (j['bl'] as num?)?.toInt() ?? neopixelBacklight;
+    neopixelLed1          = (j['l1'] as num?)?.toInt() ?? neopixelLed1;
+    neopixelLed2          = (j['l2'] as num?)?.toInt() ?? neopixelLed2;
+    neopixelChainCount    = (j['l3'] as num?)?.toInt() ?? neopixelChainCount;
+    neopixelIsRgbw        = j['l4'] as bool?           ?? neopixelIsRgbw;
+    neopixelColorOrder    = (j['l5'] as num?)?.toInt() ?? neopixelColorOrder;
+    neopixelConfigLoaded  = true;
+    notifyListeners();
+  }
+
+  void updateCleanupState(Map<String, dynamic> j) {
+    cleanupActive = ((j['s0'] as num?)?.toInt() ?? 0) == 1;
+    cleanupSpeed  = (j['s1'] as num?)?.toDouble() ?? cleanupSpeed;
+    notifyListeners();
+  }
+
+  void updateMotorConfig(Map<String, dynamic> j) {
+    final mt = (j['mt'] as num?)?.toInt() ?? -1;
+    if (mt == 0) {
+      coarseMotor      = MotorConfig.fromJson(j);
+      coarseMotorLoaded = true;
+    } else if (mt == 1) {
+      fineMotor      = MotorConfig.fromJson(j);
+      fineMotorLoaded = true;
+    }
+    notifyListeners();
+  }
+
+  void updateDisplayConfig(Map<String, dynamic> j) {
+    displayInvertedEncoder = j['b0'] as bool? ?? displayInvertedEncoder;
+    displayRotation        = (j['b1'] as num?)?.toInt() ?? displayRotation;
+    displayConfigLoaded    = true;
     notifyListeners();
   }
 
@@ -193,6 +318,18 @@ class AppState extends ChangeNotifier {
 
   void setConnecting(bool v) {
     isConnecting = v;
+    notifyListeners();
+  }
+
+  /// Forces all loaded flags so settings tabs don't spin forever
+  /// when the device firmware doesn't support a command yet.
+  void forceDefaultsLoaded() {
+    scaleConfigLoaded    = true;
+    chargeConfigLoaded   = true;
+    neopixelConfigLoaded = true;
+    displayConfigLoaded  = true;
+    coarseMotorLoaded    = true;
+    fineMotorLoaded      = true;
     notifyListeners();
   }
 }
