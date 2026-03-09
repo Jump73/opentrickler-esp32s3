@@ -17,6 +17,7 @@ static ble_uart_rx_cb_t s_rx_cb        = NULL;
 static uint16_t         s_conn_handle  = BLE_HS_CONN_HANDLE_NONE;
 static uint16_t         s_tx_val_handle = 0;
 static char             s_dev_name[32] = "OpenTrickler";
+static uint16_t         s_mtu          = 23; // negotiated ATT MTU, updated on BLE_GAP_EVENT_MTU
 
 // ---------------------------------------------------------------------------
 // NUS 128-bit UUIDs  (little-endian byte order as required by NimBLE)
@@ -155,7 +156,8 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
         break;
 
     case BLE_GAP_EVENT_MTU:
-        ESP_LOGI(TAG, "MTU updated: %d", event->mtu.value);
+        s_mtu = event->mtu.value;
+        ESP_LOGI(TAG, "MTU updated: %d", s_mtu);
         break;
 
     case BLE_GAP_EVENT_SUBSCRIBE:
@@ -256,7 +258,19 @@ esp_err_t ble_uart_send(const uint8_t *data, size_t len)
 
 esp_err_t ble_uart_send_str(const char *str)
 {
-    return ble_uart_send((const uint8_t *)str, strlen(str));
+    const uint8_t *data = (const uint8_t *)str;
+    size_t remaining = strlen(str);
+    // ATT payload = MTU - 3 bytes (opcode + handle)
+    uint16_t payload = (s_mtu > 3) ? (s_mtu - 3) : 20;
+
+    while (remaining > 0) {
+        size_t chunk = (remaining < payload) ? remaining : payload;
+        esp_err_t ret = ble_uart_send(data, chunk);
+        if (ret != ESP_OK) return ret;
+        data      += chunk;
+        remaining -= chunk;
+    }
+    return ESP_OK;
 }
 
 bool ble_uart_is_connected(void)

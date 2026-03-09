@@ -33,13 +33,15 @@ class _ProfilesScreenState extends State<ProfilesScreen> {
                 final p = state.profiles[i];
                 final isActive = p.index == state.currentProfileIndex;
                 return ListTile(
+                  tileColor: isActive ? Colors.green.withOpacity(0.15) : null,
                   leading: CircleAvatar(
                     backgroundColor:
-                        isActive ? Colors.amber.withOpacity(0.3) : null,
+                        isActive ? Colors.green.withOpacity(0.3) : null,
                     child: Text(
                       '${p.index}',
                       style: TextStyle(
-                          color: isActive ? Colors.amber : null),
+                          color: isActive ? Colors.green : null,
+                          fontWeight: isActive ? FontWeight.bold : null),
                     ),
                   ),
                   title: Text(
@@ -48,7 +50,7 @@ class _ProfilesScreenState extends State<ProfilesScreen> {
                         fontWeight: isActive ? FontWeight.bold : null),
                   ),
                   trailing: isActive
-                      ? const Icon(Icons.check, color: Colors.amber)
+                      ? const Icon(Icons.check, color: Colors.green)
                       : null,
                   onTap: () => _openProfile(ctx, p),
                 );
@@ -104,14 +106,13 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
   @override
   void initState() {
     super.initState();
-    // Clear stale details from any previous profile view
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) context.read<AppState>().clearProfileConfig();
-    });
+    // Clear stale details synchronously before requesting, to avoid stale
+    // data from a previous profile view matching in build().
+    context.read<AppState>().clearProfileConfig();
     widget.bleService.requestProfileConfig(widget.profileIndex);
-    // Fallback: if no response in 2 s (non-existent profile, lost packet,
+    // Fallback: if no response in 3 s (non-existent profile, lost packet,
     // old firmware), load with empty defaults so the form is usable.
-    _loadTimer = Timer(const Duration(seconds: 2), () {
+    _loadTimer = Timer(const Duration(seconds: 3), () {
       if (mounted && !_loaded) {
         setState(() => _loadFrom(ProfileDetails(index: widget.profileIndex)));
       }
