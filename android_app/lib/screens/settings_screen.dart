@@ -167,9 +167,9 @@ class _ChargeTabState extends State<_ChargeTab> {
     final state = context.watch<AppState>();
     if (!_loaded && state.coarseStopThreshold > 0) {
       _loaded = true;
-      _coarse.text = state.coarseStopThreshold.toStringAsFixed(3);
-      _fine.text = state.fineStopThreshold.toStringAsFixed(3);
-      _trickle.text = state.fineTrickleThreshold.toStringAsFixed(3);
+      _coarse.text = state.coarseStopThreshold.toStringAsFixed(2);
+      _fine.text = state.fineStopThreshold.toStringAsFixed(2);
+      _trickle.text = state.fineTrickleThreshold.toStringAsFixed(2);
     }
 
     return Padding(
@@ -177,11 +177,11 @@ class _ChargeTabState extends State<_ChargeTab> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _numField('Coarse stop threshold (gr)', _coarse),
+          _numField('Coarse stop threshold (gn)', _coarse),
           const SizedBox(height: 16),
-          _numField('Fine stop threshold (gr)', _fine),
+          _numField('Fine stop threshold (gn)', _fine),
           const SizedBox(height: 16),
-          _numField('Fine trickle threshold (gr)', _trickle),
+          _numField('Fine trickle threshold (gn)', _trickle),
           const SizedBox(height: 24),
           FilledButton(
             onPressed: _apply,

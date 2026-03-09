@@ -36,7 +36,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     if (!_targetEditing && state.targetWeight > 0 && _localTarget == 0.0) {
       _localTarget = state.targetWeight;
-      _targetCtrl.text = _localTarget.toStringAsFixed(3);
+      _targetCtrl.text = _localTarget.toStringAsFixed(2);
     }
 
     final isActive = state.chargeState != ChargeState.exit;
@@ -118,7 +118,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       style: const TextStyle(
                           fontSize: 18, fontWeight: FontWeight.bold),
                       decoration: const InputDecoration(
-                        labelText: 'Target (gr)',
+                        labelText: 'Target (gn)',
                         border: OutlineInputBorder(),
                         contentPadding: EdgeInsets.symmetric(vertical: 12),
                       ),
@@ -126,7 +126,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       onSubmitted: (v) {
                         _targetEditing = false;
                         _localTarget = double.tryParse(v) ?? _localTarget;
-                        _targetCtrl.text = _localTarget.toStringAsFixed(3);
+                        _targetCtrl.text = _localTarget.toStringAsFixed(2);
                         widget.bleService.setTargetWeight(_localTarget);
                       },
                     ),
@@ -218,7 +218,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ),
             ),
-            Text('gr',
+            Text('gn',
                 style: Theme.of(context)
                     .textTheme
                     .bodySmall
@@ -256,8 +256,8 @@ class _HomeScreenState extends State<HomeScreen> {
             Text(
               (state.chargeState == ChargeState.removeCup ||
                       state.chargeState == ChargeState.returnCup)
-                  ? 'Settled: ${state.settledWeight} gr'
-                  : 'Target: ${state.targetWeight.toStringAsFixed(3)} gr',
+                  ? 'Settled: ${state.settledWeight} gn'
+                  : 'Target: ${state.targetWeight.toStringAsFixed(2)} gn',
               style: Theme.of(context)
                   .textTheme
                   .bodySmall
@@ -400,7 +400,7 @@ class _HomeScreenState extends State<HomeScreen> {
             const SizedBox(width: 8),
             Text(state.settledWeight,
                 style: TextStyle(color: color, fontSize: 14)),
-            Text(' gr', style: TextStyle(color: color.withOpacity(0.7), fontSize: 14)),
+            Text(' gn', style: TextStyle(color: color.withOpacity(0.7), fontSize: 14)),
           ],
         ],
       ),
@@ -445,10 +445,10 @@ class _HomeScreenState extends State<HomeScreen> {
                       : Colors.orange;
               return DataRow(cells: [
                 DataCell(Text('${state.chargeHistory.length - idx}')),
-                DataCell(Text(r.target.toStringAsFixed(3))),
+                DataCell(Text(r.target.toStringAsFixed(2))),
                 DataCell(Text(r.weight)),
                 DataCell(Text(
-                  '${r.error >= 0 ? '+' : ''}${r.error.toStringAsFixed(3)}',
+                  '${r.error >= 0 ? '+' : ''}${r.error.toStringAsFixed(2)}',
                   style: TextStyle(
                       color: r.error.abs() < 0.01 ? Colors.green : Colors.orange),
                 )),
@@ -548,7 +548,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _targetEditing = false;
     _localTarget = (_localTarget + delta).clamp(0.0, 200.0);
     _localTarget = ((_localTarget) * 1000).round() / 1000;
-    _targetCtrl.text = _localTarget.toStringAsFixed(3);
+    _targetCtrl.text = _localTarget.toStringAsFixed(2);
     widget.bleService.setTargetWeight(_localTarget);
   }
 
