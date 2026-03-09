@@ -39,8 +39,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _targetCtrl.text = _localTarget.toStringAsFixed(3);
     }
 
-    final isActive = state.chargeState == ChargeState.waitForZero ||
-        state.chargeState == ChargeState.charging;
+    final isActive = state.chargeState != ChargeState.exit;
 
     return Scaffold(
       appBar: AppBar(
