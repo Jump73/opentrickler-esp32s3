@@ -213,6 +213,10 @@ class BleService {
       send({'cmd': 'charge_mode_config'});
 
   Future<void> saveChargeConfig({
+    required int colorNormal,
+    required int colorUnder,
+    required int colorOver,
+    required int colorNotReady,
     required double coarseStop,
     required double fineStop,
     required double fineTrickle,
@@ -223,6 +227,10 @@ class BleService {
   }) =>
       send({
         'cmd': 'charge_mode_config',
+        'c1': colorNormal,
+        'c2': colorUnder,
+        'c3': colorOver,
+        'c4': colorNotReady,
         'c5': coarseStop,
         'c6': fineStop,
         'c10': prechargeEnable,

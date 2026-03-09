@@ -249,6 +249,10 @@ static void handle_charge_mode_config(const cJSON *j)
     bool config_changed = false;
     bool save_to_nvs = json_get_bool(j, "ee", false);
 
+    if (json_has_key(j, "c1")) { config.neopixel_normal_charge_colour = (uint32_t)json_get_int(j, "c1", (int)config.neopixel_normal_charge_colour); config_changed = true; }
+    if (json_has_key(j, "c2")) { config.neopixel_under_charge_colour  = (uint32_t)json_get_int(j, "c2", (int)config.neopixel_under_charge_colour);  config_changed = true; }
+    if (json_has_key(j, "c3")) { config.neopixel_over_charge_colour   = (uint32_t)json_get_int(j, "c3", (int)config.neopixel_over_charge_colour);   config_changed = true; }
+    if (json_has_key(j, "c4")) { config.neopixel_not_ready_colour     = (uint32_t)json_get_int(j, "c4", (int)config.neopixel_not_ready_colour);     config_changed = true; }
     if (json_has_key(j, "c5")) { config.coarse_stop_threshold    = (float)json_get_double(j, "c5", config.coarse_stop_threshold);   config_changed = true; }
     if (json_has_key(j, "c6")) { config.fine_stop_threshold      = (float)json_get_double(j, "c6", config.fine_stop_threshold);     config_changed = true; }
     if (json_has_key(j, "c7")) { config.set_point_sd_margin      = (float)json_get_double(j, "c7", config.set_point_sd_margin);     config_changed = true; }
@@ -266,6 +270,10 @@ static void handle_charge_mode_config(const cJSON *j)
 
     cJSON *resp = cJSON_CreateObject();
     cJSON_AddStringToObject(resp, "cmd", "charge_mode_config");
+    cJSON_AddNumberToObject(resp, "c1", (double)config.neopixel_normal_charge_colour);
+    cJSON_AddNumberToObject(resp, "c2", (double)config.neopixel_under_charge_colour);
+    cJSON_AddNumberToObject(resp, "c3", (double)config.neopixel_over_charge_colour);
+    cJSON_AddNumberToObject(resp, "c4", (double)config.neopixel_not_ready_colour);
     cJSON_AddNumberToObject(resp, "c5",  config.coarse_stop_threshold);
     cJSON_AddNumberToObject(resp, "c6",  config.fine_stop_threshold);
     cJSON_AddNumberToObject(resp, "c7",  config.set_point_sd_margin);

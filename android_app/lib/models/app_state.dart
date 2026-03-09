@@ -159,6 +159,10 @@ class AppState extends ChangeNotifier {
   int scaleBaudrate = 1;
 
   // --- Charge config ---
+  int chargeColorNormal   = 0x00FF00; // Green
+  int chargeColorUnder    = 0xFFFF00; // Yellow
+  int chargeColorOver     = 0xFF0000; // Red
+  int chargeColorNotReady = 0x0000FF; // Blue
   double coarseStopThreshold = 1.0;
   double fineStopThreshold = 0.1;
   double fineTrickleThreshold = 0.2;
@@ -251,6 +255,10 @@ class AppState extends ChangeNotifier {
   }
 
   void updateChargeConfig(Map<String, dynamic> j) {
+    chargeColorNormal    = (j['c1'] as num?)?.toInt() ?? chargeColorNormal;
+    chargeColorUnder     = (j['c2'] as num?)?.toInt() ?? chargeColorUnder;
+    chargeColorOver      = (j['c3'] as num?)?.toInt() ?? chargeColorOver;
+    chargeColorNotReady  = (j['c4'] as num?)?.toInt() ?? chargeColorNotReady;
     coarseStopThreshold  = (j['c5']  as num?)?.toDouble() ?? coarseStopThreshold;
     fineStopThreshold    = (j['c6']  as num?)?.toDouble() ?? fineStopThreshold;
     fineTrickleThreshold = (j['c13'] as num?)?.toDouble() ?? fineTrickleThreshold;

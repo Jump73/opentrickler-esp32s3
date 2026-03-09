@@ -186,7 +186,17 @@ class _ChargeTabState extends State<_ChargeTab> {
   final _prechargeTime  = TextEditingController();
   final _prechargeSpeed = TextEditingController();
   bool _prechargeEnable = false;
+
+  Color _colorNormal   = const Color(0xFF00FF00);
+  Color _colorUnder    = const Color(0xFFFFFF00);
+  Color _colorOver     = const Color(0xFFFF0000);
+  Color _colorNotReady = const Color(0xFF0000FF);
+
   bool _loaded = false;
+
+  // ignore: deprecated_member_use
+  static int _toInt(Color c) => (c.red << 16) | (c.green << 8) | c.blue;
+  static Color _fromInt(int v) => Color(0xFF000000 | (v & 0xFFFFFF));
 
   @override
   void dispose() {
@@ -211,6 +221,10 @@ class _ChargeTabState extends State<_ChargeTab> {
       _prechargeEnable     = state.prechargeEnable;
       _prechargeTime.text  = state.prechargeTimeMs.toString();
       _prechargeSpeed.text = state.prechargeSpeedRps.toStringAsFixed(2);
+      _colorNormal         = _fromInt(state.chargeColorNormal);
+      _colorUnder          = _fromInt(state.chargeColorUnder);
+      _colorOver           = _fromInt(state.chargeColorOver);
+      _colorNotReady       = _fromInt(state.chargeColorNotReady);
     }
 
     if (!_loaded) return const Center(child: CircularProgressIndicator());
@@ -241,6 +255,19 @@ class _ChargeTabState extends State<_ChargeTab> {
           const SizedBox(height: 12),
           _numField('Precharge speed (rps)', _prechargeSpeed),
         ],
+        const SizedBox(height: 20),
+        const Divider(),
+        const Padding(
+          padding: EdgeInsets.symmetric(vertical: 8),
+          child: Text('LED colours', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+        ),
+        _colorRow('Normal charge', _colorNormal,   (c) => setState(() => _colorNormal   = c)),
+        const SizedBox(height: 12),
+        _colorRow('Under charge',  _colorUnder,    (c) => setState(() => _colorUnder    = c)),
+        const SizedBox(height: 12),
+        _colorRow('Over charge',   _colorOver,     (c) => setState(() => _colorOver     = c)),
+        const SizedBox(height: 12),
+        _colorRow('Not ready / waiting', _colorNotReady, (c) => setState(() => _colorNotReady = c)),
         const SizedBox(height: 24),
         FilledButton(
           onPressed: _apply,
@@ -252,16 +279,82 @@ class _ChargeTabState extends State<_ChargeTab> {
 
   Widget _numField(String label, TextEditingController ctrl) => TextField(
         controller: ctrl,
-        keyboardType:
-            const TextInputType.numberWithOptions(decimal: true),
+        keyboardType: const TextInputType.numberWithOptions(decimal: true),
         decoration: InputDecoration(
           labelText: label,
           border: const OutlineInputBorder(),
         ),
       );
 
+  Widget _colorRow(String label, Color color, ValueChanged<Color> onChanged) {
+    return InkWell(
+      onTap: () => _pickColor(label, color, onChanged),
+      child: InputDecorator(
+        decoration: InputDecoration(
+          labelText: label,
+          border: const OutlineInputBorder(),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 32,
+              height: 24,
+              decoration: BoxDecoration(
+                color: color,
+                border: Border.all(color: Colors.grey),
+                borderRadius: BorderRadius.circular(4),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Text(
+              '#${_toInt(color).toRadixString(16).padLeft(6, '0').toUpperCase()}',
+              style: const TextStyle(fontFamily: 'monospace'),
+            ),
+            const Spacer(),
+            const Icon(Icons.colorize, size: 18, color: Colors.grey),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _pickColor(String label, Color current, ValueChanged<Color> onChanged) async {
+    Color picked = current;
+    await showDialog<void>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text('Pick $label colour'),
+        content: SingleChildScrollView(
+          child: HueRingPicker(
+            pickerColor: current,
+            onColorChanged: (c) => picked = c,
+            enableAlpha: false,
+            displayThumbColor: true,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              onChanged(picked);
+              Navigator.pop(context);
+            },
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _apply() {
     widget.bleService.saveChargeConfig(
+      colorNormal:       _toInt(_colorNormal),
+      colorUnder:        _toInt(_colorUnder),
+      colorOver:         _toInt(_colorOver),
+      colorNotReady:     _toInt(_colorNotReady),
       coarseStop:        double.tryParse(_coarse.text)         ?? 1.0,
       fineStop:          double.tryParse(_fine.text)           ?? 0.03,
       fineTrickle:       double.tryParse(_trickle.text)        ?? 0.2,
