@@ -1,5 +1,8 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:share_plus/share_plus.dart';
+import 'package:path_provider/path_provider.dart';
 import '../services/ble_service.dart';
 import '../models/app_state.dart';
 import 'profiles_screen.dart';
@@ -17,6 +20,7 @@ class _HomeScreenState extends State<HomeScreen> {
   final _targetCtrl = TextEditingController();
   double _localTarget = 0.0;
   bool _targetEditing = false;
+  bool _historyExpanded = false;
 
   @override
   void initState() {
@@ -179,7 +183,41 @@ class _HomeScreenState extends State<HomeScreen> {
               // ── Charge history ───────────────────────────────────────
               if (state.chargeHistory.isNotEmpty) ...[
                 const Divider(),
-                _historyTable(context, state),
+                Row(
+                  children: [
+                    Expanded(
+                      child: InkWell(
+                        onTap: () => setState(() => _historyExpanded = !_historyExpanded),
+                        child: Row(
+                          children: [
+                            Icon(
+                              _historyExpanded ? Icons.expand_less : Icons.expand_more,
+                              color: Colors.grey,
+                              size: 20,
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              'History (${state.chargeHistory.length})',
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .titleSmall
+                                  ?.copyWith(color: Colors.grey),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.download, size: 20),
+                      tooltip: 'Export CSV',
+                      color: Colors.grey,
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                      onPressed: () => _exportCsv(state),
+                    ),
+                  ],
+                ),
+                if (_historyExpanded) _historyTable(context, state),
               ],
             ],
           ),
@@ -411,12 +449,7 @@ class _HomeScreenState extends State<HomeScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Text('History',
-            style: Theme.of(context)
-                .textTheme
-                .titleSmall
-                ?.copyWith(color: Colors.grey)),
-        const SizedBox(height: 6),
+        const SizedBox(height: 4),
         SingleChildScrollView(
           scrollDirection: Axis.horizontal,
           child: DataTable(
@@ -566,6 +599,24 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _abort() => widget.bleService.abortCharging();
+
+  Future<void> _exportCsv(AppState state) async {
+    final buf = StringBuffer();
+    buf.writeln('#,Target (gn),Weight (gn),Error (gn),Time (s),Result');
+    for (int i = 0; i < state.chargeHistory.length; i++) {
+      final r = state.chargeHistory[i];
+      final num = state.chargeHistory.length - i;
+      final err = r.error >= 0 ? '+${r.error.toStringAsFixed(3)}' : r.error.toStringAsFixed(3);
+      buf.writeln('$num,${r.target.toStringAsFixed(3)},${_fmt(r.weight)},${err},${r.time},${r.result}');
+    }
+    final dir = await getTemporaryDirectory();
+    final file = File('${dir.path}/opentrickler_history.csv');
+    await file.writeAsString(buf.toString());
+    await Share.shareXFiles(
+      [XFile(file.path, mimeType: 'text/csv')],
+      subject: 'OpenTrickler History',
+    );
+  }
 
   void _openProfiles(BuildContext context) {
     Navigator.push(
