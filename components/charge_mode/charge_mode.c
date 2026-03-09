@@ -12,6 +12,10 @@
 #include "scale.h"
 #include "profile.h"
 #include "flow_model.h"
+
+// Set to 1 to re-enable the flow model (adaptive inertia / feedforward).
+// When disabled the charge loop runs in pure PID mode.
+#define FLOW_MODEL_ENABLED 0
 #include "esp_log.h"
 #include "nvs_flash.h"
 #include "nvs.h"
@@ -327,7 +331,9 @@ static void do_wait_for_complete(void)
     motor_enable(MOTOR_FINE, false);
 
     // Start flow model recording for coarse motor
+#if FLOW_MODEL_ENABLED
     flow_model_record_start(MOTOR_COARSE);
+#endif
 
 
     // Reset timer
@@ -344,6 +350,7 @@ static void do_wait_for_complete(void)
              fine_min_speed, fine_max_speed);
 
     // Log feedforward model status
+#if FLOW_MODEL_ENABLED
     {
         flow_model_t fm;
         if (flow_model_get(profile_idx, &fm) == ESP_OK) {
@@ -357,6 +364,7 @@ static void do_wait_for_complete(void)
             ESP_LOGI(TAG, "FF: no model data, pure PID mode");
         }
     }
+#endif
 
     while (!exit_requested()) {
         // Block wait for measurement
@@ -383,6 +391,7 @@ static void do_wait_for_complete(void)
         // negligible — use the configured threshold directly.
         // Outside trickle (fast approach), apply learned inertia to stop earlier.
         float fine_stop = charge_mode_config.fine_stop_threshold;
+#if FLOW_MODEL_ENABLED
         if (!fine_trickle && flow_model_is_trusted(profile_idx, MOTOR_FINE)) {
             float inertia_gn = flow_model_get_inertia_overshoot(profile_idx, MOTOR_FINE);
             if (inertia_gn > 0.0f) {
@@ -391,6 +400,7 @@ static void do_wait_for_complete(void)
                                   charge_mode_config.fine_trickle_threshold * 0.5f);
             }
         }
+#endif
         if (error < fine_stop) {
             ESP_LOGI(TAG, "Target reached! weight=%.4f, error=%.4f (fine_stop=%.4f)",
                      current_weight, error, fine_stop);
@@ -411,20 +421,25 @@ static void do_wait_for_complete(void)
             motor_enable(MOTOR_COARSE, false);
 
             // Mark coarse motor stop (recording continues for inertia measurement)
+#if FLOW_MODEL_ENABLED
             flow_model_record_stop();
-            // Collect post-stop settling samples for inertia calculation
-            // Update displayed weight so UI reflects in-flight powder from coarse
+#endif
+            // Collect post-stop settling samples — update UI weight display
             for (int i = 0; i < 10; i++) {
                 float settle_w;
                 if (scale_block_wait_for_measurement(200, &settle_w)) {
+#if FLOW_MODEL_ENABLED
                     flow_model_record_sample(0.0f, settle_w);
+#endif
                     runtime_lock();
                     runtime_state.current_weight = settle_w;
                     runtime_unlock();
                 }
             }
+#if FLOW_MODEL_ENABLED
             flow_model_analyze_and_update(profile_get_selected_idx());
             flow_model_record_start(MOTOR_FINE);
+#endif
 
             // Start fine motor now that coarse is done
             motor_enable(MOTOR_FINE, true);
@@ -470,7 +485,9 @@ static void do_wait_for_complete(void)
         }
 
         // Record sample for flow model
+#if FLOW_MODEL_ENABLED
         flow_model_record_sample(set_speed, current_weight);
+#endif
 
         last_sample_tick = current_tick;
         last_error = error;
@@ -479,7 +496,9 @@ static void do_wait_for_complete(void)
     // Charge was externally cancelled (REST s2=0). Do not classify or save
     // partial/invalid result from the interrupted cycle.
     if (exit_requested()) {
+#if FLOW_MODEL_ENABLED
         flow_model_record_stop();
+#endif
         stop_all_motors();
         ESP_LOGI(TAG, "Charge interrupted: skip settle/post-settle result classification");
         return;
@@ -491,7 +510,9 @@ static void do_wait_for_complete(void)
     // Hard timeout at 4000ms total; last reading used as fallback.
     // LED classification and settled_weight are set AFTER this block fires so they
     // reflect the truly stable weight, not just the moment the motor stopped.
+#if FLOW_MODEL_ENABLED
     flow_model_record_stop();
+#endif
     {
         const uint32_t min_wait_ms     = 2000;
         const uint32_t hard_timeout_ms = 4000;
@@ -526,7 +547,9 @@ static void do_wait_for_complete(void)
                 continue;
             }
 
+#if FLOW_MODEL_ENABLED
             flow_model_record_sample(0.0f, settle_w);
+#endif
             runtime_lock();
             runtime_state.current_weight = settle_w;
             runtime_unlock();
@@ -562,7 +585,9 @@ static void do_wait_for_complete(void)
         }
     }
 
+#if FLOW_MODEL_ENABLED
     flow_model_analyze_and_update(profile_get_selected_idx());
+#endif
 
     // Classify charge result immediately after settling so REST API and LED
     // reflect the real outcome (overcharge visible) before WAIT_FOR_CUP_REMOVAL.
