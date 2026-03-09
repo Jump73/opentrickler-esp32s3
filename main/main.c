@@ -46,18 +46,6 @@ static void ui_update_task(void *arg)
     }
 }
 
-// Smart root handler - returns wizard in AP mode, portal in STA mode
-static char* root_page_handler(int num_params, char *params[], char *values[])
-{
-    // AP mode → wizard, STA mode → portal
-    if (wifi_manager_is_ap_mode()) {
-        ESP_LOGI(TAG, "Root request - returning wizard (AP mode)");
-        return (char*)html_wizard_html;
-    } else {
-        ESP_LOGI(TAG, "Root request - returning portal (STA mode)");
-        return (char*)html_web_portal_html;
-    }
-}
 
 void app_main(void)
 {
@@ -196,64 +184,73 @@ void app_main(void)
         }
     }
 
+    // Start WiFi first and wait for stable link before network services.
     ESP_LOGI(TAG, "Step 11: Auto-starting WiFi (STA or AP)...");
     ret = wifi_manager_auto_start("OpenTrickler-ESP32", "opentrickler");
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "WiFi start failed: %s", esp_err_to_name(ret));
         return;
     }
-
     // Wait a bit for WiFi to stabilize
     ESP_LOGI(TAG, "Step 12: Waiting for WiFi to stabilize...");
     vTaskDelay(pdMS_TO_TICKS(2000));
 
-    // Initialize HTTP server
     ESP_LOGI(TAG, "Step 13: Starting HTTP server...");
     ret = http_server_init();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "HTTP server init failed: %s", esp_err_to_name(ret));
-        return;
     }
 
     // Register HTML pages
     ESP_LOGI(TAG, "Step 14: Registering web pages...");
-    // Smart root handler - shows wizard in AP mode, portal in STA mode
-    http_server_register_rest_handler("/", root_page_handler);
-    http_server_register_page_handler("/wizard", html_wizard_html);
-    http_server_register_page_handler("/portal", html_web_portal_html);
-    http_server_register_page_handler("/mobile", html_web_portal_html);
-    http_server_register_page_handler("/display_mirror", html_display_mirror_html);
+    if (ret == ESP_OK) {
+        // Serve / directly as wizard (AP) or portal (STA) — no redirect needed
+        if (wifi_manager_is_ap_mode()) {
+            http_server_register_gzip_page("/", gzip_wizard_html, gzip_wizard_html_len);
+        } else {
+            http_server_register_gzip_page("/", gzip_web_portal_html, gzip_web_portal_html_len);
+        }
+        http_server_register_gzip_page("/wizard",        gzip_wizard_html,        gzip_wizard_html_len);
+        http_server_register_gzip_page("/portal",        gzip_web_portal_html,    gzip_web_portal_html_len);
+        http_server_register_gzip_page("/mobile",        gzip_web_portal_html,    gzip_web_portal_html_len);
+        http_server_register_gzip_page("/display_mirror",gzip_display_mirror_html,gzip_display_mirror_html_len);
+    }
 
     // Register REST endpoints
     ESP_LOGI(TAG, "Step 15: Registering REST endpoints...");
-    http_server_register_rest_handler("/rest/wireless_config", rest_wireless_config_handler);
-    http_server_register_rest_handler("/rest/system_control", rest_system_control_handler);
-    http_server_register_rest_handler("/rest/coarse_motor_config", rest_coarse_motor_config_handler);
-    http_server_register_rest_handler("/rest/fine_motor_config", rest_fine_motor_config_handler);
-    http_server_register_rest_handler("/rest/scale_config", rest_scale_config_handler);
-    http_server_register_rest_handler("/rest/scale_action", rest_scale_action_handler);
-    http_server_register_rest_handler("/rest/charge_mode_config", rest_charge_mode_config_handler);
-    http_server_register_rest_handler("/rest/charge_mode_state", rest_charge_mode_state_handler);
-    http_server_register_rest_handler("/rest/profile_config", rest_profile_config_handler);
-    http_server_register_rest_handler("/rest/profile_summary", rest_profile_summary_handler);
-    http_server_register_rest_handler("/rest/cleanup_mode_state", rest_cleanup_mode_state_handler);
-    http_server_register_rest_handler("/rest/neopixel_led_config", rest_neopixel_led_config_handler);
-    http_server_register_rest_handler("/rest/mini_12864_config", rest_mini_12864_config_handler);
-    http_server_register_rest_handler("/rest/autotune_coarse", rest_autotune_coarse_handler);
-    http_server_register_rest_handler("/rest/autotune_trials", rest_autotune_trials_handler);
-    http_server_register_rest_handler("/rest/autotune_telemetry", rest_autotune_telemetry_handler);
-    http_server_register_rest_handler("/rest/flow_model", rest_flow_model_handler);
+    if (ret == ESP_OK) {
+        http_server_register_rest_handler("/rest/wireless_config", rest_wireless_config_handler);
+        http_server_register_rest_handler("/rest/system_control", rest_system_control_handler);
+        http_server_register_rest_handler("/rest/coarse_motor_config", rest_coarse_motor_config_handler);
+        http_server_register_rest_handler("/rest/fine_motor_config", rest_fine_motor_config_handler);
+        http_server_register_rest_handler("/rest/scale_config", rest_scale_config_handler);
+        http_server_register_rest_handler("/rest/scale_action", rest_scale_action_handler);
+        http_server_register_rest_handler("/rest/charge_mode_config", rest_charge_mode_config_handler);
+        http_server_register_rest_handler("/rest/charge_mode_state", rest_charge_mode_state_handler);
+        http_server_register_rest_handler("/rest/profile_config", rest_profile_config_handler);
+        http_server_register_rest_handler("/rest/profile_summary", rest_profile_summary_handler);
+        http_server_register_rest_handler("/rest/cleanup_mode_state", rest_cleanup_mode_state_handler);
+        http_server_register_rest_handler("/rest/neopixel_led_config", rest_neopixel_led_config_handler);
+        http_server_register_rest_handler("/rest/mini_12864_config", rest_mini_12864_config_handler);
+        http_server_register_rest_handler("/rest/autotune_coarse", rest_autotune_coarse_handler);
+        http_server_register_rest_handler("/rest/autotune_trials", rest_autotune_trials_handler);
+        http_server_register_rest_handler("/rest/autotune_telemetry", rest_autotune_telemetry_handler);
+        http_server_register_rest_handler("/rest/flow_model", rest_flow_model_handler);
+    }
+
+    ESP_LOGI(TAG, "Step 16: BLE disabled");
 
     ESP_LOGI(TAG, "");
     ESP_LOGI(TAG, "============================================");
     ESP_LOGI(TAG, "OpenTrickler ESP32-S3 ready!");
     ESP_LOGI(TAG, "");
-    ESP_LOGI(TAG, "Connect to WiFi:");
-    ESP_LOGI(TAG, "  SSID: OpenTrickler-ESP32");
-    ESP_LOGI(TAG, "  Password: opentrickler");
-    ESP_LOGI(TAG, "");
-    ESP_LOGI(TAG, "Then open browser:");
-    ESP_LOGI(TAG, "  http://%s/", wifi_manager_get_ip());
+    if (wifi_manager_is_ap_mode()) {
+        ESP_LOGI(TAG, "Connect to WiFi:");
+        ESP_LOGI(TAG, "  SSID: OpenTrickler-ESP32");
+        ESP_LOGI(TAG, "  Password: opentrickler");
+        ESP_LOGI(TAG, "");
+    }
+    ESP_LOGI(TAG, "Open browser: http://%s/", wifi_manager_get_ip());
     ESP_LOGI(TAG, "============================================");
     ESP_LOGI(TAG, "");
 

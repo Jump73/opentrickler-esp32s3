@@ -30,3 +30,31 @@ CONFIG_LV_USE_SYSMON=n
 CONFIG_LV_USE_PROFILER=n
 CONFIG_LV_USE_PERF_MONITOR=n
 CONFIG_LV_USE_MEM_MONITOR=n
+
+# Disable WiFi PM in disconnected state — prevents coexist from re-enabling PS
+# during the disconnect→reconnect window (source of wifi:m f null instability).
+CONFIG_ESP_WIFI_STA_DISCONNECTED_PM_ENABLE=n
+
+# TCP buffers: with chunked gzip (4 KB/chunk) the send buffer only needs to hold
+# one chunk at a time — no longer needs to fit the full 17 KB body.
+# Reducing from 32768 saves ~26 KB per connection from the lwIP heap; the
+# internal RAM freed is needed by the WiFi driver (wifi:mem fail otherwise).
+CONFIG_LWIP_TCP_SND_BUF_DEFAULT=5760
+CONFIG_LWIP_TCP_WND_DEFAULT=5760
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=16
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=6
+# Keep WiFi dynamic TX buffers at 32: with 4-6 parallel HTTP connections each
+# sending 3 TCP segments simultaneously, 16 buffers are fully consumed by data
+# frames, leaving no room for management null frames (PS exit) → wifi:m f null.
+# Dynamic buffers are only allocated when a frame is queued, so peak usage
+# (not constant) determines memory cost. TCP buffer reduction (above) already
+# fixes the wifi:mem fail heap exhaustion.
+CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=32
+# Static RX management frame buffers: keep at 5 (default).
+# DO NOT increase above 5 without freeing equivalent RAM elsewhere first.
+CONFIG_ESP_WIFI_STATIC_RX_MGMT_BUFFER=y
+
+# WiFi-only overrides
+CONFIG_BT_ENABLED=n
+CONFIG_BT_NIMBLE_ENABLED=n
+CONFIG_ESP_COEX_SW_COEXIST_ENABLE=n
