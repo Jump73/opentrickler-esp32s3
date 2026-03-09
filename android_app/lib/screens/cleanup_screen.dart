@@ -1,7 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
 import '../services/ble_service.dart';
-import '../models/app_state.dart';
 
 class CleanupScreen extends StatefulWidget {
   final BleService bleService;
@@ -17,32 +15,31 @@ class _CleanupScreenState extends State<CleanupScreen> {
   @override
   void initState() {
     super.initState();
-    // Enter cleanup mode when screen opens
     widget.bleService.setCleanupMode(true);
   }
 
   @override
   void dispose() {
-    // Exit cleanup mode and stop motors when screen closes
+    widget.bleService.setCleanupSpeed(0.0);
     widget.bleService.setCleanupMode(false);
     super.dispose();
   }
 
+  void _stop() {
+    setState(() => _speed = 0.0);
+    widget.bleService.setCleanupSpeed(0.0);
+  }
+
   @override
   Widget build(BuildContext context) {
-    final state = context.watch<AppState>();
-
-    // Sync local speed from state if not actively adjusting
-    if (_speed == 0.0 && state.cleanupSpeed != 0.0) {
-      _speed = state.cleanupSpeed;
-    }
+    final running = _speed != 0.0;
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('Cleanup Mode'),
         leading: BackButton(
           onPressed: () {
-            // Exit cleanup mode before popping
+            widget.bleService.setCleanupSpeed(0.0);
             widget.bleService.setCleanupMode(false);
             Navigator.pop(context);
           },
@@ -60,10 +57,8 @@ class _CleanupScreenState extends State<CleanupScreen> {
                 child: Row(
                   children: [
                     Icon(
-                      state.cleanupActive
-                          ? Icons.settings_backup_restore
-                          : Icons.stop_circle,
-                      color: state.cleanupActive ? Colors.amber : Colors.grey,
+                      running ? Icons.settings_backup_restore : Icons.stop_circle,
+                      color: running ? Colors.amber : Colors.grey,
                       size: 32,
                     ),
                     const SizedBox(width: 12),
@@ -71,14 +66,14 @@ class _CleanupScreenState extends State<CleanupScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          state.cleanupActive ? 'Cleanup Active' : 'Cleanup Idle',
+                          running ? 'Motor Running' : 'Motor Stopped',
                           style: TextStyle(
                             fontWeight: FontWeight.bold,
-                            color: state.cleanupActive ? Colors.amber : Colors.grey,
+                            color: running ? Colors.amber : Colors.grey,
                           ),
                         ),
                         Text(
-                          'Speed: ${state.cleanupSpeed.toStringAsFixed(2)} rps',
+                          'Speed: ${_speed.toStringAsFixed(2)} rps',
                           style: const TextStyle(fontSize: 12, color: Colors.grey),
                         ),
                       ],
@@ -97,8 +92,7 @@ class _CleanupScreenState extends State<CleanupScreen> {
                     style: TextStyle(fontWeight: FontWeight.w500)),
                 Text(
                   _speed.toStringAsFixed(1),
-                  style: const TextStyle(
-                      fontSize: 20, fontWeight: FontWeight.bold),
+                  style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
                 ),
               ],
             ),
@@ -111,12 +105,8 @@ class _CleanupScreenState extends State<CleanupScreen> {
               max: 5.0,
               divisions: 100,
               label: _speed.toStringAsFixed(1),
-              onChanged: (v) {
-                setState(() => _speed = v);
-              },
-              onChangeEnd: (v) {
-                widget.bleService.setCleanupSpeed(v);
-              },
+              onChanged: (v) => setState(() => _speed = v),
+              onChangeEnd: (v) => widget.bleService.setCleanupSpeed(v),
             ),
 
             // Range labels
@@ -138,10 +128,7 @@ class _CleanupScreenState extends State<CleanupScreen> {
                 side: const BorderSide(color: Colors.orange),
                 foregroundColor: Colors.orange,
               ),
-              onPressed: () {
-                setState(() => _speed = 0.0);
-                widget.bleService.setCleanupSpeed(0.0);
-              },
+              onPressed: running ? _stop : null,
             ),
             const Spacer(),
 
